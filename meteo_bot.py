@@ -196,6 +196,210 @@ def fmt_pressure(hpa, unit):
     v = hpa * PRESSURE_FACTOR[unit]
     return f"{v:.2f}" if unit == "inhg" else f"{round(v)}"
 
+# --- Language (per-chat; "auto" = adopt the platform hint on first message) ---
+DEFAULT_LANG = "en"
+SUPPORTED_LANGS = ("en", "ro")
+
+def norm_lang(code):
+    if code and str(code).lower().startswith("ro"):
+        return "ro"
+    return "en"
+
+def get_lang(chat_id):
+    return load_state().get(str(chat_id), {}).get("lang", DEFAULT_LANG)
+
+def set_lang(chat_id, lang):
+    def m(state):
+        state.setdefault(str(chat_id), {})["lang"] = lang
+    update_state(m)
+
+def ensure_lang(chat_id, hint):
+    """If the user hasn't chosen a language yet, adopt the platform hint once."""
+    if "lang" not in load_state().get(str(chat_id), {}) and hint:
+        set_lang(chat_id, norm_lang(hint))
+
+# Romanian model descriptions (English ones live in MODELS)
+MODEL_DESC_RO = {
+    "auto":   "Auto (Open-Meteo alege cel mai bun model per locatie)",
+    "icon":   "DWD ICON seamless (cade pe ICON-EU la noi)",
+    "iconeu": "DWD ICON-EU 7 km - acopera Romania",
+    "ecmwf":  "ECMWF IFS 0.25 grade",
+    "gfs":    "NOAA GFS",
+    "arpege": "Meteo-France ARPEGE/AROME",
+    "ukmo":   "UK Met Office",
+    "gem":    "Canada GEM",
+    "jma":    "Japan JMA",
+}
+
+def model_desc(key, lang):
+    if lang == "ro" and key in MODEL_DESC_RO:
+        return MODEL_DESC_RO[key]
+    return MODELS.get(key, (None, ""))[1]
+
+WEEKDAYS_LANG = {
+    "en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    "ro": ["Lun", "Mar", "Mie", "Joi", "Vin", "Sam", "Dum"],
+}
+
+# --- Translation table: key -> {en, ro} (str.format templates) ---
+T = {
+    "wx_usage": {
+        "en": ("Usage:\n<code>wx Orsova</code> \u2014 24h hourly\n"
+               "<code>wx 44.816,29.879</code> \u2014 by coordinates\n"
+               "<code>wx Orsova 3</code> \u2014 3-day forecast\n"
+               "<code>wx 3</code> \u2014 3-day for all saved locations"),
+        "ro": ("Utilizare:\n<code>wx Orsova</code> \u2014 orar pe 24h\n"
+               "<code>wx 44.816,29.879</code> \u2014 dupa coordonate\n"
+               "<code>wx Orsova 3</code> \u2014 prognoza pe 3 zile\n"
+               "<code>wx 3</code> \u2014 3 zile pentru toate locatiile salvate"),
+    },
+    "wx_usage_short": {
+        "en": "Usage: <code>wx Orsova</code> or <code>wx Orsova 3</code>",
+        "ro": "Utilizare: <code>wx Orsova</code> sau <code>wx Orsova 3</code>",
+    },
+    "no_saved_wx": {
+        "en": "No saved locations. Add one (<code>save 1 Orsova</code>) or use <code>wx Orsova 3</code>",
+        "ro": "Nicio locatie salvata. Adauga una (<code>save 1 Orsova</code>) sau foloseste <code>wx Orsova 3</code>",
+    },
+    "loc_not_found": {
+        "en": "Location not found: {loc}", "ro": "Locatie negasita: {loc}",
+    },
+    "city_not_found": {
+        "en": "City \u201c{city}\u201d not found. Check the spelling.",
+        "ro": "Orasul \u201e{city}\u201d nu a fost gasit. Verifica denumirea.",
+    },
+    "loc_not_found_plain": {"en": "Location not found.", "ro": "Locatie negasita."},
+    "src_model": {
+        "en": "source: Open-Meteo \u00b7 model: <i>{model}</i>",
+        "ro": "sursa: Open-Meteo \u00b7 model: <i>{model}</i>",
+    },
+    "hdr_24h": {"en": "24h forecast", "ro": "prognoza 24h"},
+    "hdr_days": {"en": "{n}-day forecast", "ro": "prognoza {n} zile"},
+    "feels": {"en": "feels", "ro": "resimtit"},
+    "gust": {"en": "gust", "ro": "rafala"},
+    "no_daily": {
+        "en": "The selected model returns no daily data for this point.",
+        "ro": "Modelul selectat nu are date zilnice pentru acest punct.",
+    },
+    "no_hourly": {
+        "en": "The selected model returns no data for this point.",
+        "ro": "Modelul selectat nu are date pentru acest punct.",
+    },
+    # model
+    "model_current": {"en": "Current model: <b>{m}</b>", "ro": "Model curent: <b>{m}</b>"},
+    "model_available": {"en": "Available models:", "ro": "Modele disponibile:"},
+    "model_change": {"en": "Change with: <code>model icon</code>",
+                     "ro": "Schimba cu: <code>model icon</code>"},
+    "model_unknown": {"en": "Unknown model: <code>{k}</code>\nOptions: {opts}",
+                      "ro": "Model necunoscut: <code>{k}</code>\nOptiuni: {opts}"},
+    "model_set": {"en": "Default model set: <b>{k}</b> \u2014 {desc}",
+                  "ro": "Model implicit setat: <b>{k}</b> \u2014 {desc}"},
+    # save / locs / del
+    "save_usage": {
+        "en": ("Usage: <code>save 1 Orsova</code>\n"
+               "or by coordinates: <code>save 1 44.816,29.879</code>"),
+        "ro": ("Utilizare: <code>save 1 Orsova</code>\n"
+               "sau dupa coordonate: <code>save 1 44.816,29.879</code>"),
+    },
+    "saved_slot": {"en": "Saved slot <b>{slot}</b>: {label}",
+                   "ro": "Salvat in slotul <b>{slot}</b>: {label}"},
+    "no_saved_add": {
+        "en": "No saved locations. Add one with: <code>save 1 Orsova</code>",
+        "ro": "Nicio locatie salvata. Adauga una cu: <code>save 1 Orsova</code>",
+    },
+    "saved_list": {"en": "Saved locations:", "ro": "Locatii salvate:"},
+    "del_usage": {"en": "Usage: <code>del 1</code>", "ro": "Utilizare: <code>del 1</code>"},
+    "del_ok": {"en": "Deleted slot {slot}.", "ro": "Slotul {slot} sters."},
+    "del_missing": {"en": "Slot {slot} not found.", "ro": "Slotul {slot} nu exista."},
+    # alerts (manual check)
+    "alerts_nothing": {"en": "nothing in next {h}h", "ro": "nimic in urmatoarele {h}h"},
+    "fetch_error": {"en": "fetch error", "ro": "eroare la preluare"},
+    # alert message (proactive)
+    "alert_header": {"en": "ALERT \u2014 {loc}", "ro": "ALERTA \u2014 {loc}"},
+    "al_gust": {"en": "\U0001f4a8 Strong gusts: up to {v} km/h around {t}",
+                "ro": "\U0001f4a8 Rafale puternice: pana la {v} km/h in jur de {t}"},
+    "al_rain": {"en": "\U0001f327\ufe0f Heavy rain: {v} mm/h around {t}",
+                "ro": "\U0001f327\ufe0f Ploaie abundenta: {v} mm/h in jur de {t}"},
+    "al_snow": {"en": "\u2744\ufe0f Snowfall: {v} cm/h around {t}",
+                "ro": "\u2744\ufe0f Ninsoare: {v} cm/h in jur de {t}"},
+    "al_heat": {"en": "\U0001f525 Heat: {v}\u00b0C around {t}",
+                "ro": "\U0001f525 Canicula: {v}\u00b0C in jur de {t}"},
+    "al_frost": {"en": "\U0001f9ca Frost: {v}\u00b0C around {t}",
+                 "ro": "\U0001f9ca Inghet: {v}\u00b0C in jur de {t}"},
+    # set thresholds
+    "thr_current": {"en": "Current alert thresholds:", "ro": "Praguri de alerta curente:"},
+    "thr_change": {"en": "Change with: <code>set gust 70</code>",
+                   "ro": "Schimba cu: <code>set gust 70</code>"},
+    "thr_unknown": {"en": "Unknown parameter: <code>{p}</code>\nOptions: {opts}",
+                    "ro": "Parametru necunoscut: <code>{p}</code>\nOptiuni: {opts}"},
+    "thr_usage": {"en": "Usage: <code>set {p} 70</code>", "ro": "Utilizare: <code>set {p} 70</code>"},
+    "thr_nan": {"en": "Value must be a number, e.g. <code>set {p} 70</code>",
+                "ro": "Valoarea trebuie sa fie un numar, ex. <code>set {p} 70</code>"},
+    "thr_set": {"en": "Threshold set: <b>{p}</b> = {v} {unit}",
+                "ro": "Prag setat: <b>{p}</b> = {v} {unit}"},
+    # units
+    "units_current": {"en": "Current display units:", "ro": "Unitati de afisare curente:"},
+    "units_examples": {
+        "en": ("Examples:\n<code>units temp F</code>\n<code>units wind ms</code>\n"
+               "<code>units rain inch</code>\n<code>units pressure mmhg</code>"),
+        "ro": ("Exemple:\n<code>units temp F</code>\n<code>units wind ms</code>\n"
+               "<code>units rain inch</code>\n<code>units pressure mmhg</code>"),
+    },
+    "units_unknown_q": {"en": "Unknown quantity. Options: temp, wind, rain, pressure",
+                        "ro": "Marime necunoscuta. Optiuni: temp, wind, rain, pressure"},
+    "units_usage": {"en": "Usage: <code>units {dim} VALUE</code>\nValues: {opts}",
+                    "ro": "Utilizare: <code>units {dim} VALOARE</code>\nValori: {opts}"},
+    "units_unknown_v": {"en": "Unknown value for {dim}: <code>{val}</code>\nValues: {opts}",
+                        "ro": "Valoare necunoscuta pentru {dim}: <code>{val}</code>\nValori: {opts}"},
+    "units_set": {"en": "Unit set: <b>{dim}</b> = {label}",
+                  "ro": "Unitate setata: <b>{dim}</b> = {label}"},
+    # soil
+    "soil_usage": {"en": "Usage: <code>soil Orsova</code> | <code>soil 44.8,29.9</code> | <code>soil 1</code>",
+                   "ro": "Utilizare: <code>soil Orsova</code> | <code>soil 44.8,29.9</code> | <code>soil 1</code>"},
+    "soil_nodata": {"en": "The selected model has no soil data for this point (try model auto).",
+                    "ro": "Modelul selectat nu are date de sol pentru acest punct (incearca model auto)."},
+    "soil_title": {"en": "soil & moisture", "ro": "sol & umiditate"},
+    "soil_time_src": {"en": "time: {t} \u00b7 source: Open-Meteo",
+                      "ro": "ora: {t} \u00b7 sursa: Open-Meteo"},
+    "soil_temp0": {"en": "\U0001f321 soil temp 0cm: {v}", "ro": "\U0001f321 temp sol 0cm: {v}"},
+    "soil_airhum": {"en": "\U0001f4a7 air humidity: {v}", "ro": "\U0001f4a7 umiditate aer: {v}"},
+    "soil_moist_h": {"en": "soil moisture (vol. water):", "ro": "umiditate sol (apa vol.):"},
+    # hist
+    "hist_usage": {
+        "en": ("Usage: <code>hist Orsova 2025-07-01 2025-07-10</code>\n"
+               "(location can be a city, coordinates, or a saved slot number)"),
+        "ro": ("Utilizare: <code>hist Orsova 2025-07-01 2025-07-10</code>\n"
+               "(locatia poate fi oras, coordonate sau numarul unui slot salvat)"),
+    },
+    "hist_baddate": {"en": "Dates must be YYYY-MM-DD. Ex: <code>hist Orsova 2025-07-01 2025-07-10</code>",
+                     "ro": "Datele trebuie in format AAAA-LL-ZZ. Ex: <code>hist Orsova 2025-07-01 2025-07-10</code>"},
+    "hist_needloc": {"en": "Specify a location. Ex: <code>hist Orsova 2025-07-01 2025-07-10</code>",
+                     "ro": "Specifica o locatie. Ex: <code>hist Orsova 2025-07-01 2025-07-10</code>"},
+    "hist_nodata": {"en": "No historical data for that period (ERA5 archive lags ~5 days).",
+                    "ro": "Fara date istorice pentru perioada (arhiva ERA5 are ~5 zile intarziere)."},
+    "hist_title": {"en": "history {a} \u2192 {b}", "ro": "istoric {a} \u2192 {b}"},
+    "hist_src": {"en": "source: Open-Meteo Archive (ERA5)", "ro": "sursa: Arhiva Open-Meteo (ERA5)"},
+    "hist_days": {"en": "days: {n}", "ro": "zile: {n}"},
+    "hist_maxavg": {"en": "\U0001f321 max avg {a}{u} (peak {b}{u})",
+                    "ro": "\U0001f321 media max {a}{u} (varf {b}{u})"},
+    "hist_minavg": {"en": "\U0001f321 min avg {a}{u} (low {b}{u})",
+                    "ro": "\U0001f321 media min {a}{u} (minim {b}{u})"},
+    "hist_precip": {"en": "\U0001f4a7 total precip {v}{u}", "ro": "\U0001f4a7 precip. total {v}{u}"},
+    "hist_gust": {"en": "\U0001f4a8 max gust {v}{u}", "ro": "\U0001f4a8 rafala max {v}{u}"},
+    # lang
+    "lang_current": {"en": "Current language: <b>{l}</b>\nChange with: <code>lang ro</code> / <code>lang en</code>",
+                     "ro": "Limba curenta: <b>{l}</b>\nSchimba cu: <code>lang ro</code> / <code>lang en</code>"},
+    "lang_set": {"en": "Language set: <b>{l}</b>", "ro": "Limba setata: <b>{l}</b>"},
+    "lang_unknown": {"en": "Supported: en, ro", "ro": "Suportate: en, ro"},
+    "err_generic": {"en": "Error: {e}", "ro": "Eroare: {e}"},
+    "fetch_generic": {"en": "Data fetch error: {e}", "ro": "Eroare la preluarea datelor: {e}"},
+}
+
+def tr(key, lang, **kw):
+    d = T.get(key, {})
+    s = d.get(lang, d.get("en", key))
+    return s.format(**kw) if kw else s
+
 # --- WMO weather codes -> description + emoji ---
 WMO = {
     0: ("Clear", "\u2600\ufe0f"), 1: ("Mostly clear", "\U0001f324\ufe0f"),
@@ -216,8 +420,29 @@ WMO = {
     99: ("Severe thunderstorm w/ hail", "\u26c8\ufe0f"),
 }
 
-def wmo_desc(code):
+def wmo_desc(code, lang="en"):
+    if lang == "ro":
+        return WMO_RO.get(code, ("\u2014", "\u2753"))
     return WMO.get(code, ("\u2014", "\u2753"))
+
+WMO_RO = {
+    0: ("Senin", "\u2600\ufe0f"), 1: ("Predominant senin", "\U0001f324\ufe0f"),
+    2: ("Partial noros", "\u26c5"), 3: ("Noros", "\u2601\ufe0f"),
+    45: ("Ceata", "\U0001f32b\ufe0f"), 48: ("Ceata cu depunere", "\U0001f32b\ufe0f"),
+    51: ("Burnita slaba", "\U0001f326\ufe0f"), 53: ("Burnita", "\U0001f326\ufe0f"),
+    55: ("Burnita densa", "\U0001f326\ufe0f"), 56: ("Burnita inghetata", "\U0001f326\ufe0f"),
+    57: ("Burnita inghetata densa", "\U0001f326\ufe0f"),
+    61: ("Ploaie slaba", "\U0001f327\ufe0f"), 63: ("Ploaie", "\U0001f327\ufe0f"),
+    65: ("Ploaie puternica", "\U0001f327\ufe0f"), 66: ("Ploaie inghetata", "\U0001f327\ufe0f"),
+    67: ("Ploaie inghetata puternica", "\U0001f327\ufe0f"),
+    71: ("Ninsoare slaba", "\U0001f328\ufe0f"), 73: ("Ninsoare", "\U0001f328\ufe0f"),
+    75: ("Ninsoare puternica", "\u2744\ufe0f"), 77: ("Grauri de zapada", "\U0001f328\ufe0f"),
+    80: ("Averse slabe", "\U0001f326\ufe0f"), 81: ("Averse", "\U0001f327\ufe0f"),
+    82: ("Averse violente", "\u26c8\ufe0f"),
+    85: ("Averse de zapada", "\U0001f328\ufe0f"), 86: ("Averse de zapada puternice", "\u2744\ufe0f"),
+    95: ("Furtuna", "\u26c8\ufe0f"), 96: ("Furtuna cu grindina", "\u26c8\ufe0f"),
+    99: ("Furtuna cu grindina puternica", "\u26c8\ufe0f"),
+}
 
 def loc_label(loc):
     lbl = loc.get("name", "")
@@ -283,11 +508,11 @@ def forecast(lat, lon, model_id, units):
     r.raise_for_status()
     return r.json()
 
-def format_24h(city, data, model_label, units):
+def format_24h(city, data, model_label, units, lang="en"):
     h = data.get("hourly", {})
     times = h.get("time", [])
     if not times:
-        return "The selected model returns no data for this point."
+        return tr("no_hourly", lang)
     n = len(times)
     temp_a = h.get("temperature_2m", [None] * n)
     feel_a = h.get("apparent_temperature", [None] * n)
@@ -302,6 +527,8 @@ def format_24h(city, data, model_label, units):
     wlab = UNIT_LABELS["wind"][units["wind"]]
     rlab = UNIT_LABELS["rain"][units["rain"]]
     plab = UNIT_LABELS["pressure"][units["pressure"]]
+    feels_w = tr("feels", lang)
+    gust_w = tr("gust", lang)
 
     off = timedelta(seconds=data.get("utc_offset_seconds", 0))
     now_local = (datetime.now(timezone.utc) + off).replace(
@@ -312,8 +539,8 @@ def format_24h(city, data, model_label, units):
             start = i
             break
 
-    lines = [f"\U0001f4cd <b>{city}</b> \u2014 24h forecast",
-             f"source: Open-Meteo \u00b7 model: <i>{model_label}</i>\n"]
+    lines = [f"\U0001f4cd <b>{city}</b> \u2014 {tr('hdr_24h', lang)}",
+             tr("src_model", lang, model=model_label) + "\n"]
     for i in range(start, min(start + 24, n)):
         t = datetime.fromisoformat(times[i])
         temp = str(round(temp_a[i])) if temp_a[i] is not None else "\u2014"
@@ -326,10 +553,10 @@ def format_24h(city, data, model_label, units):
         gust = str(round(gust_a[i])) if gust_a[i] is not None else "\u2014"
         pv = fmt_pressure(pres_a[i], units["pressure"])
         pres_s = f"  {pv} {plab}" if pv is not None else ""
-        desc, emo = wmo_desc(code_a[i]) if code_a[i] is not None else ("", "")
+        desc, emo = wmo_desc(code_a[i], lang) if code_a[i] is not None else ("", "")
         lines.append(
-            f"{t:%H:%M} {emo} {temp}{tlab} (feels {feel}\u00b0)  "
-            f"\U0001f4a7{pop_s}{amt_s}  \U0001f4a8{wind} {wlab} (gust {gust}){pres_s}  {desc}"
+            f"{t:%H:%M} {emo} {temp}{tlab} ({feels_w} {feel}\u00b0)  "
+            f"\U0001f4a7{pop_s}{amt_s}  \U0001f4a8{wind} {wlab} ({gust_w} {gust}){pres_s}  {desc}"
         )
     return "\n".join(lines)
 
@@ -351,11 +578,11 @@ def forecast_daily(lat, lon, model_id, units, days):
     r.raise_for_status()
     return r.json()
 
-def format_daily(city, data, model_label, units, days):
+def format_daily(city, data, model_label, units, days, lang="en"):
     d = data.get("daily", {})
     times = d.get("time", [])
     if not times:
-        return "The selected model returns no daily data for this point."
+        return tr("no_daily", lang)
     n = len(times)
     code = d.get("weather_code", [None] * n)
     tmax = d.get("temperature_2m_max", [None] * n)
@@ -367,13 +594,15 @@ def format_daily(city, data, model_label, units, days):
     tlab = UNIT_LABELS["temp"][units["temp"]]
     wlab = UNIT_LABELS["wind"][units["wind"]]
     rlab = UNIT_LABELS["rain"][units["rain"]]
+    gust_w = tr("gust", lang)
+    wdays = WEEKDAYS_LANG.get(lang, WEEKDAYS_LANG["en"])
     span = min(days, n)
-    lines = [f"\U0001f4cd <b>{city}</b> \u2014 {span}-day forecast",
-             f"source: Open-Meteo \u00b7 model: <i>{model_label}</i>\n"]
+    lines = [f"\U0001f4cd <b>{city}</b> \u2014 {tr('hdr_days', lang, n=span)}",
+             tr("src_model", lang, model=model_label) + "\n"]
     for i in range(span):
         dt = datetime.fromisoformat(times[i])
-        wd = WEEKDAYS[dt.weekday()]
-        desc, emo = wmo_desc(code[i]) if code[i] is not None else ("", "")
+        wd = wdays[dt.weekday()]
+        desc, emo = wmo_desc(code[i], lang) if code[i] is not None else ("", "")
         hi = str(round(tmax[i])) if tmax[i] is not None else "\u2014"
         lo = str(round(tmin[i])) if tmin[i] is not None else "\u2014"
         pr = pprob[i]
@@ -384,7 +613,7 @@ def format_daily(city, data, model_label, units, days):
         gst = str(round(gmax[i])) if gmax[i] is not None else "\u2014"
         lines.append(
             f"{wd} {dt:%d.%m} {emo} {lo}/{hi}{tlab}  "
-            f"\U0001f4a7{pr_s}{ps_s}  \U0001f4a8{wnd} {wlab} (gust {gst})  {desc}"
+            f"\U0001f4a7{pr_s}{ps_s}  \U0001f4a8{wnd} {wlab} ({gust_w} {gst})  {desc}"
         )
     return "\n".join(lines)
 
@@ -453,18 +682,24 @@ def evaluate_alerts(data, thresholds):
             track("frost", tp, hhmm, "min")
     return trig
 
-def format_alert_line(phenom, val, tstr):
+def format_alert_line(phenom, val, tstr, lang="en"):
     if phenom == "gust":
-        return f"\U0001f4a8 Strong gusts: up to {round(val)} km/h around {tstr}"
+        return tr("al_gust", lang, v=round(val), t=tstr)
     if phenom == "rain":
-        return f"\U0001f327\ufe0f Heavy rain: {val:.1f} mm/h around {tstr}"
+        return tr("al_rain", lang, v=f"{val:.1f}", t=tstr)
     if phenom == "snow":
-        return f"\u2744\ufe0f Snowfall: {val:.1f} cm/h around {tstr}"
+        return tr("al_snow", lang, v=f"{val:.1f}", t=tstr)
     if phenom == "heat":
-        return f"\U0001f525 Heat: {round(val)}\u00b0C around {tstr}"
+        return tr("al_heat", lang, v=round(val), t=tstr)
     if phenom == "frost":
-        return f"\U0001f9ca Frost: {round(val)}\u00b0C around {tstr}"
+        return tr("al_frost", lang, v=round(val), t=tstr)
     return f"{phenom}: {val} at {tstr}"
+
+def build_alert_message(loc, new_lines, model_label, lang):
+    """Assemble a proactive alert message (used by Telegram and WhatsApp)."""
+    header = "\u26a0\ufe0f <b>" + tr("alert_header", lang, loc=loc_label(loc)) + "</b>"
+    footer = tr("src_model", lang, model=model_label)
+    return header + "\n" + "\n".join(new_lines) + "\n\n" + footer
 
 def already_sent(chat_id, key):
     return key in load_state().get(str(chat_id), {}).get("alerts_sent", {})
@@ -481,11 +716,9 @@ def mark_sent(chat_id, key, today):
 
 # --- Commands ---
 def cmd_wx(args, chat_id):
+    lang = get_lang(chat_id)
     if not args:
-        return ("Usage:\n<code>wx Orsova</code> \u2014 24h hourly\n"
-                "<code>wx 44.816,29.879</code> \u2014 by coordinates\n"
-                "<code>wx Orsova 3</code> \u2014 3-day forecast\n"
-                "<code>wx 3</code> \u2014 3-day for all saved locations")
+        return tr("wx_usage", lang)
     units = get_units(chat_id)
     model_id, model_label = MODELS.get(get_model(chat_id), MODELS[DEFAULT_MODEL])
     toks = list(args)
@@ -500,69 +733,72 @@ def cmd_wx(args, chat_id):
     # bare number: N-day for every saved location
     if not loc_text:
         if days is None:
-            return "Usage: <code>wx Orsova</code> or <code>wx Orsova 3</code>"
+            return tr("wx_usage_short", lang)
         locs = load_state().get(str(chat_id), {}).get("locations", {})
         if not locs:
-            return "No saved locations. Add one (<code>save 1 Orsova</code>) or use <code>wx Orsova 3</code>"
+            return tr("no_saved_wx", lang)
         out = []
         for slot in sorted(locs, key=int):
             loc = locs[slot]
             data = forecast_daily(loc["lat"], loc["lon"], model_id, units, days)
-            out.append(format_daily(loc_label(loc), data, model_label, units, days))
+            out.append(format_daily(loc_label(loc), data, model_label, units, days, lang))
         return "\n\n".join(out)
 
     loc = resolve_location(loc_text, chat_id)
     if not loc:
-        return f"Location not found: {loc_text}"
+        return tr("loc_not_found", lang, loc=loc_text)
     if days is None:
         data = forecast(loc["lat"], loc["lon"], model_id, units)
-        return format_24h(loc_label(loc), data, model_label, units)
+        return format_24h(loc_label(loc), data, model_label, units, lang)
     data = forecast_daily(loc["lat"], loc["lon"], model_id, units, days)
-    return format_daily(loc_label(loc), data, model_label, units, days)
+    return format_daily(loc_label(loc), data, model_label, units, days, lang)
 
 def cmd_model(args, chat_id):
+    lang = get_lang(chat_id)
     current = get_model(chat_id)
     if not args:
-        lines = [f"Current model: <b>{current}</b>\n", "Available models:"]
-        for k, (mid, desc) in MODELS.items():
+        lines = [tr("model_current", lang, m=current) + "\n", tr("model_available", lang)]
+        for k in MODELS:
             mark = " \u2705" if k == current else ""
-            lines.append(f"<code>{k}</code> \u2014 {desc}{mark}")
-        lines.append("\nChange with: <code>model icon</code>")
+            lines.append(f"<code>{k}</code> \u2014 {model_desc(k, lang)}{mark}")
+        lines.append("\n" + tr("model_change", lang))
         return "\n".join(lines)
     key = args[0].lower()
     if key not in MODELS:
-        return f"Unknown model: <code>{key}</code>\nOptions: {', '.join(MODELS.keys())}"
+        return tr("model_unknown", lang, k=key, opts=", ".join(MODELS.keys()))
     set_model(chat_id, key)
-    return f"Default model set: <b>{key}</b> \u2014 {MODELS[key][1]}"
+    return tr("model_set", lang, k=key, desc=model_desc(key, lang))
 
 def cmd_save(args, chat_id):
+    lang = get_lang(chat_id)
     if len(args) < 2 or not args[0].isdigit():
-        return ("Usage: <code>save 1 Orsova</code>\n"
-                "or by coordinates: <code>save 1 44.816,29.879</code>")
+        return tr("save_usage", lang)
     slot = args[0]
     loc_text = " ".join(args[1:]).strip()
     loc = coords_or_city(loc_text)
     if not loc:
-        return f"Location \u201c{loc_text}\u201d not found. Check the spelling."
+        return tr("city_not_found", lang, city=loc_text)
     entry = {"name": loc["name"], "country": loc.get("country", ""),
              "lat": loc["lat"], "lon": loc["lon"]}
     def m(state):
         state.setdefault(str(chat_id), {}).setdefault("locations", {})[slot] = entry
     update_state(m)
-    return f"Saved slot <b>{slot}</b>: {loc_label(entry)}"
+    return tr("saved_slot", lang, slot=slot, label=loc_label(entry))
 
 def cmd_locs(args, chat_id):
+    lang = get_lang(chat_id)
     locations = load_state().get(str(chat_id), {}).get("locations", {})
     if not locations:
-        return "No saved locations. Add one with: <code>save 1 Orsova</code>"
-    lines = ["Saved locations:"]
+        return tr("no_saved_add", lang)
+    lines = [tr("saved_list", lang)]
     for slot in sorted(locations, key=int):
         lines.append(f"<b>{slot}</b> \u2014 {loc_label(locations[slot])}")
     return "\n".join(lines)
 
 def cmd_del(args, chat_id):
+    lang = get_lang(chat_id)
     if not args or not args[0].isdigit():
-        return "Usage: <code>del 1</code>"
+        return tr("del_usage", lang)
     slot = args[0]
     removed = [False]
     def m(state):
@@ -571,13 +807,14 @@ def cmd_del(args, chat_id):
             del locs[slot]
             removed[0] = True
     update_state(m)
-    return f"Deleted slot {slot}." if removed[0] else f"Slot {slot} not found."
+    return tr("del_ok", lang, slot=slot) if removed[0] else tr("del_missing", lang, slot=slot)
 
 def cmd_alerts(args, chat_id):
+    lang = get_lang(chat_id)
     cdata = load_state().get(str(chat_id), {})
     locations = cdata.get("locations", {})
     if not locations:
-        return "No saved locations. Add one with: <code>save 1 Orsova</code>"
+        return tr("no_saved_add", lang)
     model_id, model_label = MODELS.get(cdata.get("model", DEFAULT_MODEL), MODELS[DEFAULT_MODEL])
     thr = get_thresholds(chat_id)
     out = []
@@ -586,61 +823,59 @@ def cmd_alerts(args, chat_id):
         try:
             data = fetch_alert_forecast(loc["lat"], loc["lon"], model_id)
         except requests.RequestException:
-            out.append(f"{loc_label(loc)}: fetch error")
+            out.append(f"{loc_label(loc)}: " + tr("fetch_error", lang))
             continue
         trig = evaluate_alerts(data, thr)
         active = {p: v for p, v in trig.items() if p in ALERTS_ENABLED}
         if not active:
-            out.append(f"\u2705 {loc_label(loc)}: nothing in next {ALERT_WINDOW_H}h")
+            out.append(f"\u2705 {loc_label(loc)}: " + tr("alerts_nothing", lang, h=ALERT_WINDOW_H))
         else:
             block = [f"\u26a0\ufe0f <b>{loc_label(loc)}</b>:"]
             for p, (val, tstr) in active.items():
-                block.append("  " + format_alert_line(p, val, tstr))
+                block.append("  " + format_alert_line(p, val, tstr, lang))
             out.append("\n".join(block))
-    return "\n\n".join(out) + f"\n\nsource: Open-Meteo \u00b7 model: {model_label}"
+    return "\n\n".join(out) + "\n\n" + tr("src_model", lang, model=model_label)
 
 def cmd_set(args, chat_id):
+    lang = get_lang(chat_id)
     thr = get_thresholds(chat_id)
     if not args:
-        lines = ["Current alert thresholds:"]
+        lines = [tr("thr_current", lang)]
         for p in ("gust", "rain", "snow", "heat", "frost"):
             lines.append(f"<code>{p}</code> {thr[p]:g} {THRESH_UNIT[p]}")
-        lines.append("\nChange with: <code>set gust 70</code>")
+        lines.append("\n" + tr("thr_change", lang))
         return "\n".join(lines)
     param = args[0].lower()
     if param not in DEFAULT_THRESHOLDS:
-        return f"Unknown parameter: <code>{param}</code>\nOptions: {', '.join(DEFAULT_THRESHOLDS)}"
+        return tr("thr_unknown", lang, p=param, opts=", ".join(DEFAULT_THRESHOLDS))
     if len(args) < 2:
-        return f"Usage: <code>set {param} 70</code>"
+        return tr("thr_usage", lang, p=param)
     try:
         value = float(args[1].replace(",", "."))
     except ValueError:
-        return f"Value must be a number, e.g. <code>set {param} 70</code>"
+        return tr("thr_nan", lang, p=param)
     set_threshold(chat_id, param, value)
-    return f"Threshold set: <b>{param}</b> = {value:g} {THRESH_UNIT[param]}"
+    return tr("thr_set", lang, p=param, v=f"{value:g}", unit=THRESH_UNIT[param])
 
 def cmd_units(args, chat_id):
+    lang = get_lang(chat_id)
     u = get_units(chat_id)
     if not args:
-        lines = ["Current display units:"]
+        lines = [tr("units_current", lang)]
         for dim in ("temp", "wind", "rain", "pressure"):
             lines.append(f"<code>{dim}</code> {UNIT_LABELS[dim][u[dim]]}")
-        lines.append("\nExamples:\n<code>units temp F</code>\n"
-                     "<code>units wind ms</code>\n<code>units rain inch</code>\n"
-                     "<code>units pressure mmhg</code>")
+        lines.append("\n" + tr("units_examples", lang))
         return "\n".join(lines)
     dim = args[0].lower()
     if dim not in DEFAULT_UNITS:
-        return "Unknown quantity. Options: temp, wind, rain, pressure"
+        return tr("units_unknown_q", lang)
     if len(args) < 2:
-        opts = ", ".join(UNIT_LABELS[dim].keys())
-        return f"Usage: <code>units {dim} VALUE</code>\nValues: {opts}"
+        return tr("units_usage", lang, dim=dim, opts=", ".join(UNIT_LABELS[dim].keys()))
     val = UNIT_ALIASES[dim].get(args[1].lower())
     if val is None:
-        opts = ", ".join(UNIT_LABELS[dim].keys())
-        return f"Unknown value for {dim}: <code>{args[1]}</code>\nValues: {opts}"
+        return tr("units_unknown_v", lang, dim=dim, val=args[1], opts=", ".join(UNIT_LABELS[dim].keys()))
     set_unit(chat_id, dim, val)
-    return f"Unit set: <b>{dim}</b> = {UNIT_LABELS[dim][val]}"
+    return tr("units_set", lang, dim=dim, label=UNIT_LABELS[dim][val])
 
 def fetch_soil(lat, lon, model_id):
     params = {
@@ -657,17 +892,18 @@ def fetch_soil(lat, lon, model_id):
     return r.json()
 
 def cmd_soil(args, chat_id):
+    lang = get_lang(chat_id)
     if not args:
-        return "Usage: <code>soil Orsova</code> | <code>soil 44.8,29.9</code> | <code>soil 1</code>"
+        return tr("soil_usage", lang)
     loc = resolve_location(" ".join(args), chat_id)
     if not loc:
-        return "Location not found."
+        return tr("loc_not_found_plain", lang)
     model_id = MODELS.get(get_model(chat_id), MODELS[DEFAULT_MODEL])[0]
     data = fetch_soil(loc["lat"], loc["lon"], model_id)
     h = data.get("hourly", {})
     times = h.get("time", [])
     if not times:
-        return "The selected model has no soil data for this point (try model auto)."
+        return tr("soil_nodata", lang)
     off = timedelta(seconds=data.get("utc_offset_seconds", 0))
     now = (datetime.now(timezone.utc) + off).replace(tzinfo=None, minute=0, second=0, microsecond=0)
     idx = 0
@@ -684,11 +920,11 @@ def cmd_soil(args, chat_id):
         return f"{v:.{dec}f}{unit}"
 
     deg = "\u00b0C"   # avoid a backslash inside the f-string braces (Python <3.12)
-    lines = [f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 soil & moisture",
-             f"time: {times[idx][-5:]} \u00b7 source: Open-Meteo\n",
-             f"\U0001f321 soil temp 0cm: {val('soil_temperature_0cm', 1, deg, 1)}",
-             f"\U0001f4a7 air humidity: {val('relative_humidity_2m', 1, '%')}",
-             "soil moisture (vol. water):",
+    lines = [f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 {tr('soil_title', lang)}",
+             tr("soil_time_src", lang, t=times[idx][-5:]) + "\n",
+             tr("soil_temp0", lang, v=val('soil_temperature_0cm', 1, deg, 1)),
+             tr("soil_airhum", lang, v=val('relative_humidity_2m', 1, '%')),
+             tr("soil_moist_h", lang),
              f"  0\u20131cm: {val('soil_moisture_0_to_1cm', 100, '%')}",
              f"  1\u20133cm: {val('soil_moisture_1_to_3cm', 100, '%')}",
              f"  3\u20139cm: {val('soil_moisture_3_to_9cm', 100, '%')}",
@@ -697,19 +933,19 @@ def cmd_soil(args, chat_id):
     return "\n".join(lines)
 
 def cmd_hist(args, chat_id):
+    lang = get_lang(chat_id)
     if len(args) < 3:
-        return ("Usage: <code>hist Orsova 2025-07-01 2025-07-10</code>\n"
-                "(location can be a city, coordinates, or a saved slot number)")
+        return tr("hist_usage", lang)
     start, end = args[-2], args[-1]
     datep = r"^\d{4}-\d{2}-\d{2}$"
     if not re.match(datep, start) or not re.match(datep, end):
-        return "Dates must be YYYY-MM-DD. Ex: <code>hist Orsova 2025-07-01 2025-07-10</code>"
+        return tr("hist_baddate", lang)
     loc_text = " ".join(args[:-2]).strip()
     if not loc_text:
-        return "Specify a location. Ex: <code>hist Orsova 2025-07-01 2025-07-10</code>"
+        return tr("hist_needloc", lang)
     loc = resolve_location(loc_text, chat_id)
     if not loc:
-        return f"Location not found: {loc_text}"
+        return tr("loc_not_found", lang, loc=loc_text)
     units = get_units(chat_id)
     params = {
         "latitude": loc["lat"], "longitude": loc["lon"],
@@ -725,7 +961,7 @@ def cmd_hist(args, chat_id):
     d = r.json().get("daily", {})
     times = d.get("time", [])
     if not times:
-        return "No historical data for that period (ERA5 archive lags ~5 days)."
+        return tr("hist_nodata", lang)
     tmax = d.get("temperature_2m_max", [])
     tmin = d.get("temperature_2m_min", [])
     psum = d.get("precipitation_sum", [])
@@ -746,13 +982,13 @@ def cmd_hist(args, chat_id):
         return f"{v:.{dec}f}" if v is not None else "\u2014"
 
     tot_p = sum(clean(psum))
-    lines = [f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 history {start} \u2192 {end}",
-             "source: Open-Meteo Archive (ERA5)\n",
-             f"days: {len(times)}",
-             f"\U0001f321 max avg {num(avg(tmax))}{tlab} (peak {num(g(max, tmax))}{tlab})",
-             f"\U0001f321 min avg {num(avg(tmin))}{tlab} (low {num(g(min, tmin))}{tlab})",
-             f"\U0001f4a7 total precip {tot_p:g}{rlab}",
-             f"\U0001f4a8 max gust {num(g(max, gmax), 0)}{wlab}"]
+    lines = [f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 {tr('hist_title', lang, a=start, b=end)}",
+             tr("hist_src", lang) + "\n",
+             tr("hist_days", lang, n=len(times)),
+             tr("hist_maxavg", lang, a=num(avg(tmax)), b=num(g(max, tmax)), u=tlab),
+             tr("hist_minavg", lang, a=num(avg(tmin)), b=num(g(min, tmin)), u=tlab),
+             tr("hist_precip", lang, v=f"{tot_p:g}", u=rlab),
+             tr("hist_gust", lang, v=num(g(max, gmax), 0), u=wlab)]
     if len(times) <= 14:
         lines.append("")
         for i in range(len(times)):
@@ -764,8 +1000,8 @@ def cmd_hist(args, chat_id):
             lines.append(f"{dt:%d.%m} {lo}/{hi}{tlab}{ps_s}")
     return "\n".join(lines)
 
-def cmd_start(args, chat_id):
-    return (
+HELP = {
+    "en": (
         "<b>Personal weather bot</b> \U0001f324\ufe0f\n"
         "Data source: Open-Meteo (free).\n\n"
         "<b>Forecast</b>\n"
@@ -788,38 +1024,88 @@ def cmd_start(args, chat_id):
         "<code>set</code> \u2014 show current alert thresholds\n"
         "<code>set gust 70</code> \u2014 change a threshold "
         "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n\n"
-        "<b>Units</b>\n"
+        "<b>Units &amp; language</b>\n"
         "<code>units</code> \u2014 show current display units\n"
         "<code>units temp F</code> \u2014 set units (temp C/F, wind kmh/ms/mph/kn, "
-        "rain mm/inch, pressure hpa/mmhg/inhg)\n\n"
+        "rain mm/inch, pressure hpa/mmhg/inhg)\n"
+        "<code>lang ro</code> / <code>lang en</code> \u2014 change language\n\n"
         "Saved locations are watched automatically: you get a message when strong "
         "wind, rain, snow, heat or frost is expected in the next hours.\n\n"
         "Type <code>help</code> to see this list again."
-    )
+    ),
+    "ro": (
+        "<b>Bot meteo personal</b> \U0001f324\ufe0f\n"
+        "Sursa datelor: Open-Meteo (gratuit).\n\n"
+        "<b>Prognoza</b>\n"
+        "<code>wx Orsova</code> \u2014 prognoza orara pe 24h\n"
+        "<code>wx 44.816,29.879</code> \u2014 dupa coordonate\n"
+        "<code>wx Orsova 3</code> \u2014 prognoza pe 3 zile (pana la 16)\n"
+        "<code>wx 7</code> \u2014 7 zile pentru toate locatiile salvate\n\n"
+        "<b>Sol &amp; istoric</b>\n"
+        "<code>soil Orsova</code> \u2014 umiditatea solului + temperatura acum\n"
+        "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 vremea din trecut pe o perioada\n\n"
+        "<b>Model</b>\n"
+        "<code>model</code> \u2014 arata modelul curent si lista de modele\n"
+        "<code>model iconeu</code> \u2014 seteaza modelul implicit (nume din lista)\n\n"
+        "<b>Locatii salvate</b>\n"
+        "<code>save 1 Orsova</code> \u2014 salveaza o locatie in slotul 1\n"
+        "<code>locs</code> \u2014 listeaza locatiile salvate\n"
+        "<code>del 1</code> \u2014 sterge locatia din slotul 1\n\n"
+        "<b>Alerte</b>\n"
+        "<code>alerts</code> \u2014 verifica acum locatiile salvate\n"
+        "<code>set</code> \u2014 arata pragurile de alerta curente\n"
+        "<code>set gust 70</code> \u2014 schimba un prag "
+        "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n\n"
+        "<b>Unitati &amp; limba</b>\n"
+        "<code>units</code> \u2014 arata unitatile de afisare curente\n"
+        "<code>units temp F</code> \u2014 seteaza unitatile (temp C/F, wind kmh/ms/mph/kn, "
+        "rain mm/inch, pressure hpa/mmhg/inhg)\n"
+        "<code>lang ro</code> / <code>lang en</code> \u2014 schimba limba\n\n"
+        "Locatiile salvate sunt monitorizate automat: primesti mesaj cand se asteapta "
+        "vant puternic, ploaie, ninsoare, canicula sau inghet in urmatoarele ore.\n\n"
+        "Scrie <code>help</code> ca sa revezi lista."
+    ),
+}
+
+def cmd_start(args, chat_id):
+    return HELP.get(get_lang(chat_id), HELP["en"])
+
+def cmd_lang(args, chat_id):
+    lang = get_lang(chat_id)
+    if not args:
+        return tr("lang_current", lang, l=lang)
+    new = args[0].lower()
+    if new not in SUPPORTED_LANGS:
+        return tr("lang_unknown", lang)
+    set_lang(chat_id, new)
+    return tr("lang_set", new, l=new)
 
 # --- Command router (easy to extend) ---
 COMMANDS = {
     "wx": cmd_wx, "model": cmd_model,
     "save": cmd_save, "locs": cmd_locs, "del": cmd_del, "alerts": cmd_alerts,
     "set": cmd_set, "units": cmd_units, "soil": cmd_soil, "hist": cmd_hist,
+    "lang": cmd_lang,
     "start": cmd_start, "help": cmd_start,
 }
 
-def handle_text(text, chat_id):
+def handle_text(text, chat_id, lang_hint=None):
     text = text.strip()
     if not text:
         return None
+    ensure_lang(chat_id, lang_hint)   # adopt phone language on first message
     parts = text.lstrip("/").split()
     cmd = parts[0].lower()
     args = parts[1:]
     fn = COMMANDS.get(cmd)
     if fn:
+        lang = get_lang(chat_id)
         try:
             return fn(args, chat_id)
         except requests.RequestException as e:
-            return f"Data fetch error: {e}"
+            return tr("fetch_generic", lang, e=e)
         except Exception as e:
-            return f"Error: {e}"
+            return tr("err_generic", lang, e=e)
     return None
 
 # --- Telegram ---
@@ -849,6 +1135,7 @@ def alert_loop():
                 model_id, model_label = MODELS.get(
                     cdata.get("model", DEFAULT_MODEL), MODELS[DEFAULT_MODEL])
                 thr = get_thresholds(chat_id)
+                lang = get_lang(chat_id)
                 for slot, loc in locations.items():
                     try:
                         data = fetch_alert_forecast(loc["lat"], loc["lon"], model_id)
@@ -865,12 +1152,10 @@ def alert_loop():
                         key = f"{slot}:{phenom}:{today}"
                         if already_sent(chat_id, key):
                             continue
-                        new_msgs.append(format_alert_line(phenom, val, tstr))
+                        new_msgs.append(format_alert_line(phenom, val, tstr, lang))
                         mark_sent(chat_id, key, today)
                     if new_msgs:
-                        header = f"\u26a0\ufe0f <b>ALERT \u2014 {loc_label(loc)}</b>"
-                        footer = f"source: Open-Meteo \u00b7 model: {model_label}"
-                        send(chat_id, header + "\n" + "\n".join(new_msgs) + "\n\n" + footer)
+                        send(chat_id, build_alert_message(loc, new_msgs, model_label, lang))
         except Exception as e:
             print("Alert loop error:", e)
         time.sleep(CHECK_INTERVAL_SEC)
@@ -893,11 +1178,12 @@ def main():
                     continue
                 chat_id = msg["chat"]["id"]
                 user_id = msg.get("from", {}).get("id")
+                lang_hint = msg.get("from", {}).get("language_code")
                 text = msg["text"]
                 print(f"[msg] chat_id={chat_id} user_id={user_id}: {text!r}")
                 if not is_allowed(user_id, chat_id):
                     continue
-                reply = handle_text(text, chat_id)
+                reply = handle_text(text, chat_id, lang_hint)
                 if reply:
                     send(chat_id, reply)
         except requests.RequestException as e:
