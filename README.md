@@ -38,10 +38,17 @@ State files (auto-created; hold saved locations / preferences / sent alerts):
 
 ## Quick install (recommended) — `install.sh`
 
-The easiest way: an **interactive script** that does everything automatically.
+The easiest way: an **interactive script** that clones the repo and sets everything up.
 
 ```bash
-cd ~/OpenMeteoBot
+# install git if needed
+sudo apt install -y git
+
+# clone the repository
+git clone https://github.com/anrobiadev/OpenMeteoBOT.git
+cd OpenMeteoBOT
+
+# run the interactive installer
 chmod +x install.sh
 ./install.sh
 ```
