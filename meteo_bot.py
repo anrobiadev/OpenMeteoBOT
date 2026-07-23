@@ -683,9 +683,10 @@ def cmd_soil(args, chat_id):
         v = a[idx] * scale
         return f"{v:.{dec}f}{unit}"
 
+    deg = "\u00b0C"   # avoid a backslash inside the f-string braces (Python <3.12)
     lines = [f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 soil & moisture",
              f"time: {times[idx][-5:]} \u00b7 source: Open-Meteo\n",
-             f"\U0001f321 soil temp 0cm: {val('soil_temperature_0cm', 1, '\u00b0C', 1)}",
+             f"\U0001f321 soil temp 0cm: {val('soil_temperature_0cm', 1, deg, 1)}",
              f"\U0001f4a7 air humidity: {val('relative_humidity_2m', 1, '%')}",
              "soil moisture (vol. water):",
              f"  0\u20131cm: {val('soil_moisture_0_to_1cm', 100, '%')}",
