@@ -120,7 +120,16 @@ WA_PORT=3100
 if [ "$WA" = 1 ]; then
   c_info "WhatsApp setup"
   c_warn "WhatsApp via Baileys is unofficial and the number can be banned. Use a secondary number if possible."
-  read -rp "Allowed WhatsApp numbers, comma-separated (digits only, empty = anyone): " WA_ALLOWED_VAL
+  echo "Who can use the WhatsApp bot?"
+  echo "  1) Anyone"
+  echo "  2) Only specific numbers"
+  read -rp "Choose [1/2]: " WA_ACCESS
+  if [ "$WA_ACCESS" = "2" ]; then
+    read -rp "Allowed numbers, comma-separated (digits only, with country code, no +): " WA_ALLOWED_VAL
+  else
+    WA_ALLOWED_VAL=""
+    c_ok "WhatsApp open to anyone."
+  fi
   WA_PORT="$(pick_port)"
   c_ok "Using port $WA_PORT for the bridge."
 
