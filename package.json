@@ -1,0 +1,17 @@
+{
+  "name": "wa-weather-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Unofficial WhatsApp (Baileys) bridge for the Open-Meteo weather bot",
+  "main": "wa_bridge.js",
+  "scripts": {
+    "start": "node wa_bridge.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "axios": "^1.7.7",
+    "express": "^4.21.0",
+    "pino": "^9.4.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
