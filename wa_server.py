@@ -81,6 +81,7 @@ def alert_loop():
                 model_id, model_label = core.MODELS.get(
                     cdata.get("model", core.DEFAULT_MODEL), core.MODELS[core.DEFAULT_MODEL])
                 thr = core.get_thresholds(chat_id)
+                lang = core.get_lang(chat_id)
                 for slot, loc in locations.items():
                     try:
                         data = core.fetch_alert_forecast(loc["lat"], loc["lon"], model_id)
@@ -97,12 +98,10 @@ def alert_loop():
                         key = f"{slot}:{phenom}:{today}"
                         if core.already_sent(chat_id, key):
                             continue
-                        new_msgs.append(core.format_alert_line(phenom, val, tstr))
+                        new_msgs.append(core.format_alert_line(phenom, val, tstr, lang))
                         core.mark_sent(chat_id, key, today)
                     if new_msgs:
-                        msg = (f"\u26a0\ufe0f *ALERT \u2014 {core.loc_label(loc)}*\n"
-                               + "\n".join(new_msgs)
-                               + f"\n\nsource: Open-Meteo \u00b7 model: {model_label}")
+                        msg = core.build_alert_message(loc, new_msgs, model_label, lang)
                         wa_send(chat_id, to_whatsapp(msg))
         except Exception as e:
             print("Alert loop error:", e)
