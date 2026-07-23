@@ -402,6 +402,7 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `alerts` | Check saved locations now |
 | `set gust 70` | Adjust alert thresholds |
 | `units temp F` | Set units (temp/wind/rain/pressure) |
+| `lang ro` / `lang en` | Switch language (auto-detected from the phone on Telegram) |
 
 Alerts for saved locations are sent **automatically** (checked every 30 min).
 
