@@ -18,6 +18,7 @@ Three files, two "worlds":
 | `wa_bridge.js` | The **WhatsApp** bridge (Baileys / unofficial WhatsApp Web) | Node.js (port 3100) |
 | `package.json` | Node dependencies for the bridge | — |
 | `install.sh` | Interactive installer (dependencies, token, QR, services) | Bash |
+| `uninstall.sh` | Removes the services and everything the installer generated | Bash |
 
 WhatsApp flow:
 
@@ -360,6 +361,20 @@ After any change to the `.service` files:
 sudo systemctl daemon-reload
 sudo systemctl restart <service-name>
 ```
+
+### Uninstall
+
+To remove the services and everything the installer generated (token, WhatsApp
+session, saved state, `node_modules`):
+
+```bash
+cd ~/OpenMeteoBOT
+chmod +x uninstall.sh
+./uninstall.sh
+```
+
+It asks for confirmation, and can optionally delete the source folder too. It does
+**not** remove system packages (Node.js, Python, pip modules).
 
 ---
 
