@@ -68,6 +68,7 @@ import os
 import time
 import json
 import re
+import unicodedata
 import threading
 import requests
 from datetime import datetime, timezone, timedelta
@@ -264,6 +265,10 @@ T = {
     "loc_not_found": {
         "en": "Location not found: {loc}", "ro": "Locatie negasita: {loc}",
     },
+    "ambiguous": {
+        "en": "Multiple saved locations match: {names}. Be more specific.",
+        "ro": "Mai multe locatii salvate se potrivesc: {names}. Fii mai specific.",
+    },
     "city_not_found": {
         "en": "City \u201c{city}\u201d not found. Check the spelling.",
         "ro": "Orasul \u201e{city}\u201d nu a fost gasit. Verifica denumirea.",
@@ -297,9 +302,11 @@ T = {
     # save / locs / del
     "save_usage": {
         "en": ("Usage: <code>save 1 Orsova</code>\n"
-               "or by coordinates: <code>save 1 44.816,29.879</code>"),
+               "by coordinates: <code>save 1 44.816,29.879</code>\n"
+               "coordinates + name: <code>save 1 46.158,21.663 Cladova</code>"),
         "ro": ("Utilizare: <code>save 1 Orsova</code>\n"
-               "sau dupa coordonate: <code>save 1 44.816,29.879</code>"),
+               "dupa coordonate: <code>save 1 44.816,29.879</code>\n"
+               "coordonate + nume: <code>save 1 46.158,21.663 Cladova</code>"),
     },
     "saved_slot": {"en": "Saved slot <b>{slot}</b>: {label}",
                    "ro": "Salvat in slotul <b>{slot}</b>: {label}"},
@@ -480,6 +487,22 @@ def coords_or_city(text):
         return {"name": f"{c[0]:.4f},{c[1]:.4f}", "country": "", "lat": c[0], "lon": c[1]}
     return geocode(text)
 
+def parse_leading_coords(tokens):
+    """Detect coordinates at the start of a token list, allowing
+    'lat,lon' | 'lat, lon' | 'lat lon'. Returns (lat, lon, rest_tokens) or None."""
+    if not tokens:
+        return None
+    c = parse_coords(tokens[0])            # single token "lat,lon"
+    if c:
+        return c[0], c[1], tokens[1:]
+    if len(tokens) >= 2:                    # two tokens: "lat," "lon" or "lat" "lon"
+        cand = (tokens[0] + tokens[1]) if tokens[0].endswith(",") \
+            else (tokens[0] + "," + tokens[1])
+        c = parse_coords(cand)
+        if c:
+            return c[0], c[1], tokens[2:]
+    return None
+
 def parse_coords_alias(text):
     """'lat, lon [alias...]' or 'lat,lon [alias...]' -> (lat, lon, alias) or None."""
     m = re.match(r"^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*(.*)$", text)
@@ -500,6 +523,48 @@ def resolve_location(text, chat_id):
         if saved:
             return saved
     return geocode(text)
+
+def _norm(s):
+    """Lowercase and strip diacritics, for forgiving name matching."""
+    s = unicodedata.normalize("NFKD", s or "")
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return s.lower().strip()
+
+def match_saved(text, chat_id):
+    """Find saved locations whose name matches `text` (diacritic/case-insensitive).
+    Tiered: exact, then prefix, then substring. Returns a list of (slot, loc)."""
+    q = _norm(text)
+    if not q:
+        return []
+    items = list(load_state().get(str(chat_id), {}).get("locations", {}).items())
+    exact = [(s, l) for s, l in items if _norm(l.get("name", "")) == q]
+    if exact:
+        return exact
+    prefix = [(s, l) for s, l in items if _norm(l.get("name", "")).startswith(q)]
+    if prefix:
+        return prefix
+    return [(s, l) for s, l in items if q in _norm(l.get("name", ""))]
+
+def find_location(text, chat_id, lang):
+    """Resolve to (loc, error). Order: coordinates, saved slot number,
+    partial saved-name match, then geocoding."""
+    text = text.strip()
+    if parse_coords(text):
+        return coords_or_city(text), None
+    if text.isdigit():
+        saved = load_state().get(str(chat_id), {}).get("locations", {}).get(text)
+        if saved:
+            return saved, None
+    m = match_saved(text, chat_id)
+    if len(m) == 1:
+        return m[0][1], None
+    if len(m) > 1:
+        names = ", ".join(loc_label(x[1]) for x in m)
+        return None, tr("ambiguous", lang, names=names)
+    g = geocode(text)
+    if g:
+        return g, None
+    return None, tr("loc_not_found", lang, loc=text)
 
 # --- Open-Meteo: hourly forecast for the wx command ---
 def forecast(lat, lon, model_id, units):
@@ -754,9 +819,9 @@ def cmd_wx(args, chat_id):
             out.append(format_daily(loc_label(loc), data, model_label, units, days, lang))
         return "\n\n".join(out)
 
-    loc = resolve_location(loc_text, chat_id)
-    if not loc:
-        return tr("loc_not_found", lang, loc=loc_text)
+    loc, err = find_location(loc_text, chat_id, lang)
+    if err:
+        return err
     if days is None:
         data = forecast(loc["lat"], loc["lon"], model_id, units)
         return format_24h(loc_label(loc), data, model_label, units, lang)
@@ -784,12 +849,20 @@ def cmd_save(args, chat_id):
     if len(args) < 2 or not args[0].isdigit():
         return tr("save_usage", lang)
     slot = args[0]
-    loc_text = " ".join(args[1:]).strip()
-    loc = coords_or_city(loc_text)
-    if not loc:
-        return tr("city_not_found", lang, city=loc_text)
-    entry = {"name": loc["name"], "country": loc.get("country", ""),
-             "lat": loc["lat"], "lon": loc["lon"]}
+    rest = args[1:]
+    pc = parse_leading_coords(rest)
+    if pc:
+        lat, lon, alias_tokens = pc
+        alias = " ".join(alias_tokens).strip()
+        entry = {"name": alias if alias else f"{lat:.4f},{lon:.4f}",
+                 "country": "", "lat": lat, "lon": lon}
+    else:
+        loc_text = " ".join(rest).strip()
+        loc = coords_or_city(loc_text)
+        if not loc:
+            return tr("city_not_found", lang, city=loc_text)
+        entry = {"name": loc["name"], "country": loc.get("country", ""),
+                 "lat": loc["lat"], "lon": loc["lon"]}
     def m(state):
         state.setdefault(str(chat_id), {}).setdefault("locations", {})[slot] = entry
     update_state(m)
@@ -905,9 +978,9 @@ def cmd_soil(args, chat_id):
     lang = get_lang(chat_id)
     if not args:
         return tr("soil_usage", lang)
-    loc = resolve_location(" ".join(args), chat_id)
-    if not loc:
-        return tr("loc_not_found_plain", lang)
+    loc, err = find_location(" ".join(args), chat_id, lang)
+    if err:
+        return err
     model_id = MODELS.get(get_model(chat_id), MODELS[DEFAULT_MODEL])[0]
     data = fetch_soil(loc["lat"], loc["lon"], model_id)
     h = data.get("hourly", {})
@@ -953,9 +1026,9 @@ def cmd_hist(args, chat_id):
     loc_text = " ".join(args[:-2]).strip()
     if not loc_text:
         return tr("hist_needloc", lang)
-    loc = resolve_location(loc_text, chat_id)
-    if not loc:
-        return tr("loc_not_found", lang, loc=loc_text)
+    loc, err = find_location(loc_text, chat_id, lang)
+    if err:
+        return err
     units = get_units(chat_id)
     params = {
         "latitude": loc["lat"], "longitude": loc["lon"],
@@ -1028,7 +1101,8 @@ HELP = {
         "<b>Saved locations</b>\n"
         "<code>save 1 Orsova</code> \u2014 save a location in slot 1\n"
         "<code>locs</code> \u2014 list your saved locations\n"
-        "<code>del 1</code> \u2014 delete the location in slot 1\n\n"
+        "<code>del 1</code> \u2014 delete the location in slot 1\n"
+        "You can type part of a saved name: <code>wx clad</code> \u2192 Cladova\n\n"
         "<b>Alerts</b>\n"
         "<code>alerts</code> \u2014 check saved locations now and report\n"
         "<code>set</code> \u2014 show current alert thresholds\n"
@@ -1060,7 +1134,8 @@ HELP = {
         "<b>Locatii salvate</b>\n"
         "<code>save 1 Orsova</code> \u2014 salveaza o locatie in slotul 1\n"
         "<code>locs</code> \u2014 listeaza locatiile salvate\n"
-        "<code>del 1</code> \u2014 sterge locatia din slotul 1\n\n"
+        "<code>del 1</code> \u2014 sterge locatia din slotul 1\n"
+        "Poti scrie o parte din nume: <code>wx clad</code> \u2192 Cladova\n\n"
         "<b>Alerte</b>\n"
         "<code>alerts</code> \u2014 verifica acum locatiile salvate\n"
         "<code>set</code> \u2014 arata pragurile de alerta curente\n"
