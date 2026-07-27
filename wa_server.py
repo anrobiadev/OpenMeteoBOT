@@ -73,6 +73,7 @@ def alert_loop():
     """Same logic as meteo_bot.alert_loop, but pushes via the Node bridge."""
     while True:
         try:
+            anm_areas = core.anm_get_areas()     # official ANM warnings, once per cycle
             state = core.load_state()
             for chat_id, cdata in state.items():
                 locations = cdata.get("locations", {})
@@ -83,6 +84,8 @@ def alert_loop():
                 thr = core.get_thresholds(chat_id)
                 lang = core.get_lang(chat_id)
                 for slot, loc in locations.items():
+                    for m in core.anm_alerts_for(chat_id, slot, loc, anm_areas, lang):
+                        wa_send(chat_id, to_whatsapp(m))
                     try:
                         data = core.fetch_alert_forecast(loc["lat"], loc["lon"], model_id)
                     except requests.RequestException:
