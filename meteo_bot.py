@@ -68,6 +68,8 @@ import os
 import time
 import json
 import re
+import math
+import hashlib
 import unicodedata
 import threading
 import requests
@@ -96,6 +98,23 @@ SNOW_CM_H = 1.0              # snowfall per hour
 HEAT_C = 35                  # heat
 FROST_C = 0                  # frost (temperature <= this)
 ALERTS_ENABLED = {"gust", "rain", "snow", "heat", "frost"}  # trim if you want fewer
+
+# --- ANM official warnings (meteoromania.ro), point-in-polygon per saved location ---
+ANM_ENABLED = os.environ.get("TG_ANM", "1") != "0"
+ANM_FEEDS = {
+    "nowcasting": "https://www.meteoromania.ro/wp-json/meteoapi/v2/avertizari-nowcasting",
+    "general": "https://www.meteoromania.ro/wp-json/meteoapi/v2/avertizari-generale",
+}
+# feeds to check per chat (default). User can change it in-app with the "anm" command.
+DEFAULT_ANM_FEEDS = [s.strip() for s in
+                     os.environ.get("TG_ANM_FEEDS", "nowcasting,general").split(",") if s.strip()]
+ANM_FEED_ALIASES = {"now": "nowcasting", "nowcasting": "nowcasting",
+                    "gen": "general", "general": "general"}
+ANM_COLORS = {
+    0: ("\U0001f7e1", "galben", "yellow"),
+    1: ("\U0001f7e0", "portocaliu", "orange"),
+    2: ("\U0001f534", "rosu", "red"),
+}
 
 # Defaults above are the baseline; per-chat "set" overrides are layered on top.
 DEFAULT_THRESHOLDS = {
@@ -219,6 +238,14 @@ def ensure_lang(chat_id, hint):
     if "lang" not in load_state().get(str(chat_id), {}) and hint:
         set_lang(chat_id, norm_lang(hint))
 
+def get_anm_feeds(chat_id):
+    return load_state().get(str(chat_id), {}).get("anm_feeds", list(DEFAULT_ANM_FEEDS))
+
+def set_anm_feeds(chat_id, feeds):
+    def m(state):
+        state.setdefault(str(chat_id), {})["anm_feeds"] = feeds
+    update_state(m)
+
 # Romanian model descriptions (English ones live in MODELS)
 MODEL_DESC_RO = {
     "auto":   "Auto (Open-Meteo alege cel mai bun model per locatie)",
@@ -245,18 +272,18 @@ WEEKDAYS_LANG = {
 # --- Translation table: key -> {en, ro} (str.format templates) ---
 T = {
     "wx_usage": {
-        "en": ("Usage:\n<code>wx Orsova</code> \u2014 24h hourly\n"
-               "<code>wx 44.816,29.879</code> \u2014 by coordinates\n"
-               "<code>wx Orsova 3</code> \u2014 3-day forecast\n"
-               "<code>wx 3</code> \u2014 3-day for all saved locations"),
-        "ro": ("Utilizare:\n<code>wx Orsova</code> \u2014 orar pe 24h\n"
-               "<code>wx 44.816,29.879</code> \u2014 dupa coordonate\n"
-               "<code>wx Orsova 3</code> \u2014 prognoza pe 3 zile\n"
-               "<code>wx 3</code> \u2014 3 zile pentru toate locatiile salvate"),
+        "en": ("Just type a place:\n<code>Orsova</code> \u2014 24h hourly\n"
+               "<code>44.816,29.879</code> \u2014 by coordinates\n"
+               "<code>Orsova 3</code> \u2014 3-day forecast\n"
+               "<code>3</code> \u2014 3-day for all saved locations"),
+        "ro": ("Scrie direct o localitate:\n<code>Orsova</code> \u2014 orar pe 24h\n"
+               "<code>44.816,29.879</code> \u2014 dupa coordonate\n"
+               "<code>Orsova 3</code> \u2014 prognoza pe 3 zile\n"
+               "<code>3</code> \u2014 3 zile pentru toate locatiile salvate"),
     },
     "wx_usage_short": {
-        "en": "Usage: <code>wx Orsova</code> or <code>wx Orsova 3</code>",
-        "ro": "Utilizare: <code>wx Orsova</code> sau <code>wx Orsova 3</code>",
+        "en": "Type a place, e.g. <code>Orsova</code> or <code>Orsova 3</code>",
+        "ro": "Scrie o localitate, ex. <code>Orsova</code> sau <code>Orsova 3</code>",
     },
     "no_saved_wx": {
         "en": "No saved locations. Add one (<code>save 1 Orsova</code>) or use <code>wx Orsova 3</code>",
@@ -400,6 +427,21 @@ T = {
     "lang_unknown": {"en": "Supported: en, ro", "ro": "Suportate: en, ro"},
     "err_generic": {"en": "Error: {e}", "ro": "Eroare: {e}"},
     "fetch_generic": {"en": "Data fetch error: {e}", "ro": "Eroare la preluarea datelor: {e}"},
+    "anm_hdr": {"en": "ANM WARNING", "ro": "AVERTIZARE ANM"},
+    "anm_code": {"en": "Code: {color}", "ro": "Cod: {color}"},
+    "anm_valid": {"en": "valid: {v}", "ro": "valabil: {v}"},
+    "anm_src": {"en": "source: meteoromania.ro (ANM)", "ro": "sursa: meteoromania.ro (ANM)"},
+    "anm_off_word": {"en": "off", "ro": "oprit"},
+    "anm_current": {
+        "en": "ANM warnings: <b>{feeds}</b>\nSet with: <code>anm nowcasting,general</code> | <code>anm nowcasting</code> | <code>anm off</code>",
+        "ro": "Avertizari ANM: <b>{feeds}</b>\nSeteaza cu: <code>anm nowcasting,general</code> | <code>anm nowcasting</code> | <code>anm off</code>",
+    },
+    "anm_set": {"en": "ANM warnings set: <b>{feeds}</b>", "ro": "Avertizari ANM setate: <b>{feeds}</b>"},
+    "anm_set_off": {"en": "ANM warnings turned off.", "ro": "Avertizari ANM oprite."},
+    "anm_unknown": {
+        "en": "Unknown feed: <code>{f}</code>. Options: nowcasting, general, both, off",
+        "ro": "Feed necunoscut: <code>{f}</code>. Optiuni: nowcasting, general, both, off",
+    },
 }
 
 def tr(key, lang, **kw):
@@ -776,6 +818,150 @@ def build_alert_message(loc, new_lines, model_label, lang):
     footer = tr("src_model", lang, model=model_label)
     return header + "\n" + "\n".join(new_lines) + "\n\n" + footer
 
+# --- ANM warnings: geometry + point-in-polygon (pure Python, no GIS libs) --------
+_MERC = 20037508.342789244
+
+def lonlat_to_mercator(lat, lon):
+    x = lon * _MERC / 180.0
+    y = math.log(math.tan((90.0 + lat) * math.pi / 360.0)) / (math.pi / 180.0)
+    return x, y * _MERC / 180.0
+
+def parse_wkt_rings(wkt):
+    """Extract coordinate rings from a WKT POLYGON/MULTIPOLYGON (Web Mercator)."""
+    rings = []
+    if not wkt:
+        return rings
+    for m in re.finditer(r"\(([-0-9.eE ,]+)\)", wkt):   # innermost coordinate groups
+        ring = []
+        for pair in m.group(1).split(","):
+            p = pair.split()
+            if len(p) >= 2:
+                try:
+                    ring.append((float(p[0]), float(p[1])))
+                except ValueError:
+                    pass
+        if len(ring) >= 3:
+            rings.append(ring)
+    return rings
+
+def point_in_ring(x, y, ring):
+    inside = False
+    n = len(ring)
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i]
+        xj, yj = ring[j]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+def point_in_rings(x, y, rings):
+    return any(point_in_ring(x, y, r) for r in rings)
+
+def anm_clean(s):
+    s = re.sub(r"<[^>]+>", " ", s or "")
+    return re.sub(r"\s+", " ", s).strip()
+
+def anm_walk(node, ctx, out):
+    """Recursively collect every geometry (coordGis) with its inherited text."""
+    if isinstance(node, dict):
+        attrs = node.get("@attributes", {})
+        if not isinstance(attrs, dict):
+            attrs = {}
+        fields = {k: v for k, v in node.items() if isinstance(v, str)}
+        fields.update(attrs)
+        newctx = dict(ctx)
+        for src, dst in (("mesaj", "mesaj"), ("fenomeneVizate", "fenomen"),
+                         ("fenomen", "fenomen"), ("dataExpirarii", "expira"),
+                         ("intervalul", "interval")):
+            if fields.get(src):
+                newctx[dst] = fields[src]
+        cg = fields.get("coordGis")
+        if cg:
+            try:
+                cul = int(str(fields.get("culoare", "0")).strip() or 0)
+            except ValueError:
+                cul = 0
+            out.append({
+                "rings": parse_wkt_rings(cg),
+                "culoare": cul,
+                "cod": fields.get("cod", ""),
+                "mesaj": newctx.get("mesaj", ""),
+                "fenomen": newctx.get("fenomen", ""),
+                "expira": newctx.get("expira", ""),
+                "interval": newctx.get("interval", ""),
+            })
+        for k, v in node.items():
+            if k != "@attributes":
+                anm_walk(v, newctx, out)
+    elif isinstance(node, list):
+        for v in node:
+            anm_walk(v, ctx, out)
+
+def anm_get_areas():
+    """Fetch active ANM warnings from all feeds -> list of areas (tagged by feed)."""
+    if not ANM_ENABLED:
+        return []
+    areas = []
+    for feed, url in ANM_FEEDS.items():
+        try:
+            r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            data = r.json()
+        except (requests.RequestException, ValueError):
+            continue
+        if isinstance(data, str):      # "Nu exista date" when nothing is active
+            continue
+        got = []
+        anm_walk(data, {}, got)
+        for a in got:
+            a["feed"] = feed
+        areas.extend(got)
+    return areas
+
+def format_anm_alert(loc, area, lang):
+    emoji, ro_name, en_name = ANM_COLORS.get(area["culoare"], ("\u26a0\ufe0f", "", ""))
+    cname = ro_name if lang == "ro" else en_name
+    lines = [f"{emoji} <b>{tr('anm_hdr', lang)} \u2014 {loc_label(loc)}</b>",
+             tr("anm_code", lang, color=cname)]
+    fen = area.get("fenomen", "")
+    if fen and "conform" not in fen.lower():
+        lines.append(fen)
+    valid = area.get("interval") or area.get("expira")
+    if valid and "conform" not in valid.lower():
+        lines.append(tr("anm_valid", lang, v=valid))
+    body = anm_clean(area.get("mesaj", ""))
+    if body:
+        lines.append(body[:400].strip())
+    lines.append(tr("anm_src", lang))
+    return "\n".join(lines)
+
+def anm_alerts_for(chat_id, slot, loc, areas, lang):
+    """Return ANM alert messages for a location (point-in-polygon), deduped per day."""
+    if not areas:
+        return []
+    feeds = get_anm_feeds(chat_id)
+    if not feeds:                       # user turned ANM off for this chat
+        return []
+    areas = [a for a in areas if a.get("feed", "") in feeds]
+    if not areas:
+        return []
+    x, y = lonlat_to_mercator(loc["lat"], loc["lon"])
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    msgs = []
+    for area in areas:
+        if not point_in_rings(x, y, area["rings"]):
+            continue
+        sig = hashlib.md5(
+            f"{area['culoare']}|{area['expira']}|{area['fenomen']}".encode()).hexdigest()[:8]
+        key = f"anm:{slot}:{sig}:{today}"
+        if already_sent(chat_id, key):
+            continue
+        mark_sent(chat_id, key, today)
+        msgs.append(format_anm_alert(loc, area, lang))
+    return msgs
+
 def already_sent(chat_id, key):
     return key in load_state().get(str(chat_id), {}).get("alerts_sent", {})
 
@@ -1088,10 +1274,11 @@ HELP = {
         "<b>Personal weather bot</b> \U0001f324\ufe0f\n"
         "Data source: Open-Meteo (free).\n\n"
         "<b>Forecast</b>\n"
-        "<code>wx Orsova</code> \u2014 24-hour hourly forecast\n"
-        "<code>wx 44.816,29.879</code> \u2014 by coordinates\n"
-        "<code>wx Orsova 3</code> \u2014 3-day forecast (up to 16)\n"
-        "<code>wx 7</code> \u2014 7-day forecast for all saved locations\n\n"
+        "Just type a place name:\n"
+        "<code>Orsova</code> \u2014 24-hour hourly forecast\n"
+        "<code>44.816,29.879</code> \u2014 by coordinates\n"
+        "<code>Orsova 3</code> \u2014 3-day forecast (up to 16)\n"
+        "<code>3</code> \u2014 3-day forecast for all saved locations\n\n"
         "<b>Soil &amp; history</b>\n"
         "<code>soil Orsova</code> \u2014 soil moisture + temperature now\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 past weather for a period\n\n"
@@ -1102,29 +1289,32 @@ HELP = {
         "<code>save 1 Orsova</code> \u2014 save a location in slot 1\n"
         "<code>locs</code> \u2014 list your saved locations\n"
         "<code>del 1</code> \u2014 delete the location in slot 1\n"
-        "You can type part of a saved name: <code>wx clad</code> \u2192 Cladova\n\n"
+        "You can type part of a saved name: <code>clad</code> \u2192 Cladova\n\n"
         "<b>Alerts</b>\n"
         "<code>alerts</code> \u2014 check saved locations now and report\n"
         "<code>set</code> \u2014 show current alert thresholds\n"
         "<code>set gust 70</code> \u2014 change a threshold "
-        "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n\n"
+        "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n"
+        "<code>anm</code> \u2014 official ANM warnings: <code>anm nowcasting,general</code> / <code>anm off</code>\n\n"
         "<b>Units &amp; language</b>\n"
         "<code>units</code> \u2014 show current display units\n"
         "<code>units temp F</code> \u2014 set units (temp C/F, wind kmh/ms/mph/kn, "
         "rain mm/inch, pressure hpa/mmhg/inhg)\n"
         "<code>lang ro</code> / <code>lang en</code> \u2014 change language\n\n"
         "Saved locations are watched automatically: you get a message when strong "
-        "wind, rain, snow, heat or frost is expected in the next hours.\n\n"
+        "wind, rain, snow, heat or frost is expected in the next hours.\n"
+        "Official ANM warnings for your exact point are included too.\n\n"
         "Type <code>help</code> to see this list again."
     ),
     "ro": (
         "<b>Bot meteo personal</b> \U0001f324\ufe0f\n"
         "Sursa datelor: Open-Meteo (gratuit).\n\n"
         "<b>Prognoza</b>\n"
-        "<code>wx Orsova</code> \u2014 prognoza orara pe 24h\n"
-        "<code>wx 44.816,29.879</code> \u2014 dupa coordonate\n"
-        "<code>wx Orsova 3</code> \u2014 prognoza pe 3 zile (pana la 16)\n"
-        "<code>wx 7</code> \u2014 7 zile pentru toate locatiile salvate\n\n"
+        "Scrie direct o localitate:\n"
+        "<code>Orsova</code> \u2014 prognoza orara pe 24h\n"
+        "<code>44.816,29.879</code> \u2014 dupa coordonate\n"
+        "<code>Orsova 3</code> \u2014 prognoza pe 3 zile (pana la 16)\n"
+        "<code>3</code> \u2014 prognoza pe 3 zile pentru toate locatiile salvate\n\n"
         "<b>Sol &amp; istoric</b>\n"
         "<code>soil Orsova</code> \u2014 umiditatea solului + temperatura acum\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 vremea din trecut pe o perioada\n\n"
@@ -1135,19 +1325,21 @@ HELP = {
         "<code>save 1 Orsova</code> \u2014 salveaza o locatie in slotul 1\n"
         "<code>locs</code> \u2014 listeaza locatiile salvate\n"
         "<code>del 1</code> \u2014 sterge locatia din slotul 1\n"
-        "Poti scrie o parte din nume: <code>wx clad</code> \u2192 Cladova\n\n"
+        "Poti scrie o parte din nume: <code>clad</code> \u2192 Cladova\n\n"
         "<b>Alerte</b>\n"
         "<code>alerts</code> \u2014 verifica acum locatiile salvate\n"
         "<code>set</code> \u2014 arata pragurile de alerta curente\n"
         "<code>set gust 70</code> \u2014 schimba un prag "
-        "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n\n"
+        "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n"
+        "<code>anm</code> \u2014 avertizari oficiale ANM: <code>anm nowcasting,general</code> / <code>anm off</code>\n\n"
         "<b>Unitati &amp; limba</b>\n"
         "<code>units</code> \u2014 arata unitatile de afisare curente\n"
         "<code>units temp F</code> \u2014 seteaza unitatile (temp C/F, wind kmh/ms/mph/kn, "
         "rain mm/inch, pressure hpa/mmhg/inhg)\n"
         "<code>lang ro</code> / <code>lang en</code> \u2014 schimba limba\n\n"
         "Locatiile salvate sunt monitorizate automat: primesti mesaj cand se asteapta "
-        "vant puternic, ploaie, ninsoare, canicula sau inghet in urmatoarele ore.\n\n"
+        "vant puternic, ploaie, ninsoare, canicula sau inghet in urmatoarele ore.\n"
+        "Se includ si avertizarile oficiale ANM pentru punctul tau exact.\n\n"
         "Scrie <code>help</code> ca sa revezi lista."
     ),
 }
@@ -1165,12 +1357,35 @@ def cmd_lang(args, chat_id):
     set_lang(chat_id, new)
     return tr("lang_set", new, l=new)
 
+def cmd_anm(args, chat_id):
+    lang = get_lang(chat_id)
+    if not args:
+        cur = get_anm_feeds(chat_id)
+        val = ", ".join(cur) if cur else tr("anm_off_word", lang)
+        return tr("anm_current", lang, feeds=val)
+    tokens = [t for t in re.split(r"[,\s]+", ",".join(args).lower()) if t]
+    if len(tokens) == 1 and tokens[0] in ("off", "none", "stop", "oprit"):
+        set_anm_feeds(chat_id, [])
+        return tr("anm_set_off", lang)
+    if len(tokens) == 1 and tokens[0] in ("both", "all", "on", "toate"):
+        feeds = list(ANM_FEEDS.keys())
+    else:
+        feeds = []
+        for tk in tokens:
+            f = ANM_FEED_ALIASES.get(tk)
+            if not f:
+                return tr("anm_unknown", lang, f=tk)
+            if f not in feeds:
+                feeds.append(f)
+    set_anm_feeds(chat_id, feeds)
+    return tr("anm_set", lang, feeds=", ".join(feeds))
+
 # --- Command router (easy to extend) ---
 COMMANDS = {
     "wx": cmd_wx, "model": cmd_model,
     "save": cmd_save, "locs": cmd_locs, "del": cmd_del, "alerts": cmd_alerts,
     "set": cmd_set, "units": cmd_units, "soil": cmd_soil, "hist": cmd_hist,
-    "lang": cmd_lang,
+    "lang": cmd_lang, "anm": cmd_anm,
     "start": cmd_start, "help": cmd_start,
 }
 
@@ -1181,17 +1396,19 @@ def handle_text(text, chat_id, lang_hint=None):
     ensure_lang(chat_id, lang_hint)   # adopt phone language on first message
     parts = text.lstrip("/").split()
     cmd = parts[0].lower()
-    args = parts[1:]
     fn = COMMANDS.get(cmd)
-    if fn:
-        lang = get_lang(chat_id)
-        try:
-            return fn(args, chat_id)
-        except requests.RequestException as e:
-            return tr("fetch_generic", lang, e=e)
-        except Exception as e:
-            return tr("err_generic", lang, e=e)
-    return None
+    if fn is not None:
+        args = parts[1:]
+    else:
+        fn = cmd_wx          # not a command -> treat the message as a place name
+        args = parts
+    lang = get_lang(chat_id)
+    try:
+        return fn(args, chat_id)
+    except requests.RequestException as e:
+        return tr("fetch_generic", lang, e=e)
+    except Exception as e:
+        return tr("err_generic", lang, e=e)
 
 # --- Telegram ---
 def send(chat_id, text):
@@ -1212,6 +1429,7 @@ def is_allowed(user_id, chat_id):
 def alert_loop():
     while True:
         try:
+            anm_areas = anm_get_areas()          # official ANM warnings, once per cycle
             state = load_state()
             for chat_id, cdata in state.items():
                 locations = cdata.get("locations", {})
@@ -1222,6 +1440,8 @@ def alert_loop():
                 thr = get_thresholds(chat_id)
                 lang = get_lang(chat_id)
                 for slot, loc in locations.items():
+                    for m in anm_alerts_for(chat_id, slot, loc, anm_areas, lang):
+                        send(chat_id, m)
                     try:
                         data = fetch_alert_forecast(loc["lat"], loc["lon"], model_id)
                     except requests.RequestException:
