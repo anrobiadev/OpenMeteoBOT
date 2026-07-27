@@ -404,10 +404,11 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | Command | What it does |
 |---|---|
 | `help` | Full command list |
-| `wx Orsova` | 24-hour hourly forecast |
-| `wx 44.816,29.879` | Forecast by coordinates |
-| `wx Orsova 3` | 3-day forecast (up to 16) |
-| `wx 7` | 7-day forecast for all saved locations |
+| `Orsova` | 24-hour hourly forecast (just type the place name) |
+| `44.816,29.879` | Forecast by coordinates |
+| `Orsova 3` | 3-day forecast (up to 16) |
+| `3` | 3-day forecast for all saved locations |
+| `clad` | Partial name matches a saved location (Cladova) |
 | `soil Orsova` | Soil moisture + temperature, now |
 | `hist Orsova 2025-07-01 2025-07-10` | Past weather for a period |
 | `model` / `model iconeu` | Show / set the weather model |
