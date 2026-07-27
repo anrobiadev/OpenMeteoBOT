@@ -1,0 +1,25 @@
+# --- secrets & runtime state (NEVER commit) ---
+meteobot.env
+*.env
+bot_state.json
+wa_state.json
+*.tmp
+
+# --- WhatsApp session (Baileys) ---
+wa_auth/
+
+# --- Node ---
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+
+# --- editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+files.zip
