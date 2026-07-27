@@ -418,8 +418,17 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `set gust 70` | Adjust alert thresholds |
 | `units temp F` | Set units (temp/wind/rain/pressure) |
 | `lang ro` / `lang en` | Switch language (auto-detected from the phone on Telegram) |
+| `anm nowcasting,general` / `anm off` | Official ANM warnings by exact point (nowcasting and/or county-level) |
 
 Alerts for saved locations are sent **automatically** (checked every 30 min).
+
+**ANM official warnings.** Each saved location is also checked against Romania's
+official ANM warnings (meteoromania.ro) using **point-in-polygon** on the exact
+coordinates — so you get the warning only if your point actually falls inside a
+warned area. Two feeds are available: `nowcasting` (immediate, short-lived) and
+`general` (county-level cod galben/portocaliu/roșu). Choose per chat with
+`anm nowcasting,general`, `anm nowcasting`, or turn it off with `anm off`. The
+warning text and color come straight from ANM.
 
 ---
 
@@ -445,6 +454,8 @@ Alerts for saved locations are sent **automatically** (checked every 30 min).
 | `TG_ALLOWED_USERS` | meteo_bot | empty | Allowed Telegram IDs (empty = anyone) |
 | `TG_BOT_STATE` | both Python | `bot_state.json` | State file |
 | `TG_ALERT_INTERVAL` | both Python | `1800` | Alert check interval (seconds) |
+| `TG_ANM` | both Python | `1` | ANM official warnings on/off globally (`0` = off) |
+| `TG_ANM_FEEDS` | both Python | `nowcasting,general` | Default ANM feeds for new chats (per-chat override via `anm`) |
 | `PY_PORT` | wa_server | `5000` | Python service port |
 | `WA_SEND_URL` | wa_server | `http://127.0.0.1:3000/send` | Where alerts are sent (Node bridge) |
 | `WA_PORT` | wa_bridge | `3000` | Node bridge port |
