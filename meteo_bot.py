@@ -883,6 +883,7 @@ def point_in_rings(x, y, rings):
 
 def anm_clean(s):
     s = re.sub(r"<[^>]+>", " ", s or "")
+    s = html.unescape(s)                 # &ndash;->–, &acirc;->â, &icirc;->î, &nbsp;->space
     return re.sub(r"\s+", " ", s).strip()
 
 def anm_walk(node, ctx, out):
@@ -951,10 +952,10 @@ def format_anm_alert(loc, area, lang):
              tr("anm_code", lang, color=html.escape(cname))]
     fen = area.get("fenomen", "")
     if fen and "conform" not in fen.lower():
-        lines.append(html.escape(fen.strip()))
+        lines.append(html.escape(html.unescape(fen.strip())))
     valid = area.get("interval") or area.get("expira")
     if valid and "conform" not in valid.lower():
-        lines.append(tr("anm_valid", lang, v=html.escape(valid.strip())))
+        lines.append(tr("anm_valid", lang, v=html.escape(html.unescape(valid.strip()))))
     body = anm_clean(area.get("mesaj", ""))
     if body:
         # send() splits long messages, so deliver the full warning (no cut).
