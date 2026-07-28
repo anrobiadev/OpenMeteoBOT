@@ -220,6 +220,30 @@ def set_unit(chat_id, dim, value):
         state.setdefault(str(chat_id), {}).setdefault("units", {})[dim] = value
     update_state(m)
 
+# --- Per-chat map settings (radar source, base dim, cloud colour/opacity, zoom) ---
+# Defaults come from the env-configured module constants (defined lower in the file);
+# they resolve at call time, so referencing them here is fine.
+def get_map_cfg(chat_id):
+    cfg = {
+        "radar_src": "anm",             # 'anm' (national image) or 'rainviewer'
+        "base_dim": MAP_BASE_DIM,       # 0=OSM full colour, 1=white-out
+        "cloud_alpha": CLOUD_MAX_ALPHA, # 0..255 opacity at 100% overcast
+        "cloud_rgb": list(CLOUD_RGB),   # [r, g, b] of the cloud shading
+        "zoom": MAP_ZOOM,               # RainViewer map zoom (3..7)
+    }
+    cfg.update(load_state().get(str(chat_id), {}).get("map", {}))
+    return cfg
+
+def set_map_cfg(chat_id, key, value):
+    def m(state):
+        state.setdefault(str(chat_id), {}).setdefault("map", {})[key] = value
+    update_state(m)
+
+def reset_map_cfg(chat_id):
+    def m(state):
+        state.setdefault(str(chat_id), {}).pop("map", None)
+    update_state(m)
+
 def fmt_pressure(hpa, unit):
     if hpa is None:
         return None
@@ -452,6 +476,37 @@ T = {
     "map_nopil": {"en": "Image maps need Pillow: <code>pip install pillow</code>",
                   "ro": "Hartile necesita Pillow: <code>pip install pillow</code>"},
     "map_nodata": {"en": "No map data available right now.", "ro": "Fara date de harta momentan."},
+    "mapset_current": {
+        "en": ("<b>Map settings</b>\n"
+               "<code>radar</code> source: <b>{src}</b>  (anm | rainviewer)\n"
+               "<code>dim</code> base fade: <b>{dim}</b>  (0..1)\n"
+               "<code>alpha</code> cloud opacity: <b>{alpha}</b>  (0..255)\n"
+               "<code>cloud</code> colour RGB: <b>{rgb}</b>\n"
+               "<code>zoom</code> map zoom: <b>{zoom}</b>  (3..7)\n\n"
+               "Change e.g.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
+               "<code>mapset alpha 225</code> | <code>mapset cloud 105,105,105</code> | "
+               "<code>mapset zoom 6</code> | <code>mapset reset</code>"),
+        "ro": ("<b>Setari harta</b>\n"
+               "<code>radar</code> sursa: <b>{src}</b>  (anm | rainviewer)\n"
+               "<code>dim</code> estompare fundal: <b>{dim}</b>  (0..1)\n"
+               "<code>alpha</code> opacitate nori: <b>{alpha}</b>  (0..255)\n"
+               "<code>cloud</code> culoare RGB: <b>{rgb}</b>\n"
+               "<code>zoom</code> zoom harta: <b>{zoom}</b>  (3..7)\n\n"
+               "Schimba ex.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
+               "<code>mapset alpha 225</code> | <code>mapset cloud 105,105,105</code> | "
+               "<code>mapset zoom 6</code> | <code>mapset reset</code>"),
+    },
+    "mapset_set": {"en": "Set <code>{k}</code> = <b>{v}</b>", "ro": "Setat <code>{k}</code> = <b>{v}</b>"},
+    "mapset_reset": {"en": "Map settings reset to defaults.", "ro": "Setarile hartii au fost resetate."},
+    "mapset_unknown": {"en": "Unknown setting: <code>{k}</code>. Type <code>mapset</code> to see options.",
+                       "ro": "Setare necunoscuta: <code>{k}</code>. Scrie <code>mapset</code> pentru optiuni."},
+    "mapset_radar_usage": {"en": "Use: <code>mapset radar anm</code> or <code>mapset radar rainviewer</code>",
+                           "ro": "Foloseste: <code>mapset radar anm</code> sau <code>mapset radar rainviewer</code>"},
+    "mapset_dim_usage": {"en": "Use: <code>mapset dim 0.55</code> (0..1)", "ro": "Foloseste: <code>mapset dim 0.55</code> (0..1)"},
+    "mapset_alpha_usage": {"en": "Use: <code>mapset alpha 225</code> (0..255)", "ro": "Foloseste: <code>mapset alpha 225</code> (0..255)"},
+    "mapset_rgb_usage": {"en": "Use: <code>mapset cloud 105,105,105</code> (r,g,b 0..255)",
+                         "ro": "Foloseste: <code>mapset cloud 105,105,105</code> (r,g,b 0..255)"},
+    "mapset_zoom_usage": {"en": "Use: <code>mapset zoom 6</code> (3..7)", "ro": "Foloseste: <code>mapset zoom 6</code> (3..7)"},
     "anm_off_word": {"en": "off", "ro": "oprit"},
     "anm_current": {
         "en": "ANM warnings: <b>{feeds}</b>\nSet with: <code>anm nowcasting,general</code> | <code>anm nowcasting</code> | <code>anm off</code>",
@@ -1084,9 +1139,12 @@ def _overlay_url(frames, layer, z, x, y):
         return f"{host}{path}/{TILE}/{z}/{x}/{y}/4/1_1.png"      # color 4, smooth+snow
     return f"{host}{path}/{TILE}/{z}/{x}/{y}/0/0_0.png"          # satellite
 
-def _cloud_overlay(bbox, w, h):
-    """White cloud-cover overlay from Open-Meteo cloud_cover sampled on a grid over
-    bbox=(latN, lonW, latS, lonE). Returns (RGBA_overlay, 'HH:MM') or (None, '')."""
+def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None):
+    """Cloud-cover overlay from Open-Meteo cloud_cover sampled on a grid over
+    bbox=(latN, lonW, latS, lonE). `rgb`/`max_alpha` override the defaults.
+    Returns (RGBA_overlay, 'HH:MM') or (None, '')."""
+    rgb = tuple(rgb) if rgb else CLOUD_RGB
+    max_alpha = CLOUD_MAX_ALPHA if max_alpha is None else max_alpha
     latN, lonW, latS, lonE = bbox
     lats, lons = [], []
     for r in range(CLOUD_ROWS):
@@ -1116,15 +1174,17 @@ def _cloud_overlay(bbox, w, h):
         c, row = i % CLOUD_COLS, i // CLOUD_COLS
         if cc is None or row >= CLOUD_ROWS:
             continue
-        a = int(CLOUD_MAX_ALPHA * max(0.0, min(100.0, float(cc))) / 100.0)
-        px[c, row] = CLOUD_RGB + (a,)                            # grey clouds (darker = denser)
+        a = int(max_alpha * max(0.0, min(100.0, float(cc))) / 100.0)
+        px[c, row] = rgb + (a,)                                  # grey clouds (darker = denser)
     overlay = grid.resize((w, h), Image.BICUBIC)                 # smooth field
     return overlay, (tstamp[-5:] if len(tstamp) >= 5 else "")    # 'HH:MM'
 
-def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0):
+def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
+              cloud_rgb=None, cloud_alpha=None):
     """Stitch OSM base + weather overlays, centered on the point, with a marker.
     `layers` items: 'radar'/'satellite' (RainViewer tiles) or 'clouds' (Open-Meteo).
     `base_dim` (0..1) washes out the OSM base so weather stands out.
+    `cloud_rgb`/`cloud_alpha` override the cloud shading.
     Returns (png_bytes, time_label) or (None, '')."""
     if not _PIL:
         return None, ""
@@ -1171,7 +1231,7 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0):
         if layer == "clouds":
             latN, lonW = tilexy_to_lonlat(left / TILE, top / TILE, z)
             latS, lonE = tilexy_to_lonlat((left + w) / TILE, (top + h) / TILE, z)
-            overlay, clabel = _cloud_overlay((latN, lonW, latS, lonE), w, h)
+            overlay, clabel = _cloud_overlay((latN, lonW, latS, lonE), w, h, cloud_rgb, cloud_alpha)
             if overlay is not None:
                 canvas.alpha_composite(overlay)
                 if clabel and not tlabel:
@@ -1261,18 +1321,19 @@ def _osm_base_for_bbox(W, S, E, N, out_w):
             canvas.paste(img, (int(round(tx * TILE - wx0)), int(round(ty * TILE - wy0))))
     return canvas, (w, h), (nx0, ny0, (nx1 - nx0), (ny1 - ny0))
 
-def build_anm_radar_map(mlat=None, mlon=None):
+def build_anm_radar_map(mlat=None, mlon=None, base_dim=None):
     """ANM national radar stretched onto a faded OSM base (georeferenced by ANM_BBOX).
     Optional marker at (mlat, mlon). Returns (png_bytes, 'HH:MM') or (None, '')."""
     if not _PIL:
         return None, ""
+    base_dim = MAP_BASE_DIM if base_dim is None else base_dim
     png_bytes, label = anm_radar_image()
     if not png_bytes:
         return None, ""
     W, S, E, N = ANM_BBOX
     base, (w, h), (nx0, ny0, dnx, dny) = _osm_base_for_bbox(W, S, E, N, ANM_MAP_W)
-    if MAP_BASE_DIM > 0:                                       # fade the base
-        base.alpha_composite(Image.new("RGBA", (w, h), (255, 255, 255, int(255 * min(1.0, MAP_BASE_DIM)))))
+    if base_dim > 0:                                           # fade the base
+        base.alpha_composite(Image.new("RGBA", (w, h), (255, 255, 255, int(255 * min(1.0, base_dim)))))
     try:
         radar = Image.open(BytesIO(png_bytes)).convert("RGBA").resize((w, h), Image.BILINEAR)
     except Exception:
@@ -1613,7 +1674,8 @@ HELP = {
         "<b>Maps</b>\n"
         "<code>radar</code> \u2014 national radar (ANM) over a faded map\n"
         "<code>sat Orsova</code> \u2014 cloud cover\n"
-        "<code>map Orsova</code> \u2014 clouds + radar\n\n"
+        "<code>map Orsova</code> \u2014 clouds + radar\n"
+        "<code>mapset</code> \u2014 map settings (radar source, dim, cloud colour/opacity, zoom)\n\n"
         "<b>Model</b>\n"
         "<code>model</code> \u2014 show the current model and the list of models\n"
         "<code>model iconeu</code> \u2014 set the default model (name from the list)\n\n"
@@ -1653,7 +1715,8 @@ HELP = {
         "<b>Harti</b>\n"
         "<code>radar</code> \u2014 radar national (ANM) peste harta estompata\n"
         "<code>sat Orsova</code> \u2014 acoperire cu nori\n"
-        "<code>map Orsova</code> \u2014 nori + radar\n\n"
+        "<code>map Orsova</code> \u2014 nori + radar\n"
+        "<code>mapset</code> \u2014 setari harta (sursa radar, estompare, culoare/opacitate nori, zoom)\n\n"
         "<b>Model</b>\n"
         "<code>model</code> \u2014 arata modelul curent si lista de modele\n"
         "<code>model iconeu</code> \u2014 seteaza modelul implicit (nume din lista)\n\n"
@@ -1716,7 +1779,7 @@ def cmd_anm(args, chat_id):
     set_anm_feeds(chat_id, feeds)
     return tr("anm_set", lang, feeds=", ".join(feeds))
 
-def _map_cmd(args, chat_id, layers, label_key, base_dim=0.0, src_key="map_src"):
+def _map_cmd(args, chat_id, layers, label_key, src_key="map_src"):
     lang = get_lang(chat_id)
     if not _PIL:
         return tr("map_nopil", lang)
@@ -1725,8 +1788,11 @@ def _map_cmd(args, chat_id, layers, label_key, base_dim=0.0, src_key="map_src"):
     loc, err = find_location(" ".join(args), chat_id, lang)
     if err:
         return err
+    cfg = get_map_cfg(chat_id)
     try:
-        png, tlabel = build_map(loc["lat"], loc["lon"], layers, base_dim=base_dim)
+        png, tlabel = build_map(loc["lat"], loc["lon"], layers, z=cfg["zoom"],
+                                base_dim=cfg["base_dim"], cloud_rgb=tuple(cfg["cloud_rgb"]),
+                                cloud_alpha=cfg["cloud_alpha"])
     except Exception as e:
         return tr("err_generic", lang, e=e)
     if not png:
@@ -1736,11 +1802,14 @@ def _map_cmd(args, chat_id, layers, label_key, base_dim=0.0, src_key="map_src"):
     return Photo(png, cap)
 
 def cmd_radar(args, chat_id):
-    # ANM national radar (in-country radars) stretched over a faded OSM base so
-    # borders show. Optional location just drops a marker on the national view.
     lang = get_lang(chat_id)
     if not _PIL:
         return tr("map_nopil", lang)
+    cfg = get_map_cfg(chat_id)
+    if cfg["radar_src"] == "rainviewer":
+        # RainViewer radar over a faded OSM base, centered on the given location.
+        return _map_cmd(args, chat_id, ["radar"], "cap_radar", src_key="map_src_radar")
+    # ANM national radar (in-country radars); optional location just drops a marker.
     mlat = mlon = None
     if args:
         loc, err = find_location(" ".join(args), chat_id, lang)
@@ -1748,7 +1817,7 @@ def cmd_radar(args, chat_id):
             return err
         mlat, mlon = loc["lat"], loc["lon"]
     try:
-        png, tlabel = build_anm_radar_map(mlat, mlon)
+        png, tlabel = build_anm_radar_map(mlat, mlon, base_dim=cfg["base_dim"])
     except Exception as e:
         return tr("err_generic", lang, e=e)
     if not png:
@@ -1759,12 +1828,68 @@ def cmd_radar(args, chat_id):
 
 def cmd_sat(args, chat_id):
     # Cloud cover from Open-Meteo (RainViewer's free tier has no satellite).
-    return _map_cmd(args, chat_id, ["clouds"], "cap_sat",
-                    base_dim=MAP_BASE_DIM, src_key="map_src_clouds")
+    return _map_cmd(args, chat_id, ["clouds"], "cap_sat", src_key="map_src_clouds")
 
 def cmd_map(args, chat_id):
-    return _map_cmd(args, chat_id, ["clouds", "radar"], "cap_map",
-                    base_dim=MAP_BASE_DIM, src_key="map_src_both")
+    return _map_cmd(args, chat_id, ["clouds", "radar"], "cap_map", src_key="map_src_both")
+
+def cmd_mapset(args, chat_id):
+    """User-editable map settings: radar source, base fade, cloud colour/opacity, zoom."""
+    lang = get_lang(chat_id)
+    cfg = get_map_cfg(chat_id)
+    if not args:
+        return tr("mapset_current", lang,
+                  src=cfg["radar_src"], dim=f"{cfg['base_dim']:g}",
+                  alpha=cfg["cloud_alpha"], rgb=",".join(map(str, cfg["cloud_rgb"])),
+                  zoom=cfg["zoom"])
+    key = args[0].lower()
+    rest = args[1:]
+    val = rest[0] if rest else ""
+    val_all = " ".join(rest)
+    if key in ("radar", "source", "src"):
+        v = val.lower()
+        if v == "anm":
+            src = "anm"
+        elif v in ("rainviewer", "rain", "rv"):
+            src = "rainviewer"
+        else:
+            return tr("mapset_radar_usage", lang)
+        set_map_cfg(chat_id, "radar_src", src)
+        return tr("mapset_set", lang, k="radar", v=src)
+    if key in ("dim", "base"):
+        try:
+            f = float(val.replace(",", ".")); assert 0.0 <= f <= 1.0
+        except (ValueError, AssertionError):
+            return tr("mapset_dim_usage", lang)
+        set_map_cfg(chat_id, "base_dim", f)
+        return tr("mapset_set", lang, k="dim", v=f"{f:g}")
+    if key in ("alpha", "cloudalpha", "opacity"):
+        try:
+            a = int(val); assert 0 <= a <= 255
+        except (ValueError, AssertionError):
+            return tr("mapset_alpha_usage", lang)
+        set_map_cfg(chat_id, "cloud_alpha", a)
+        return tr("mapset_set", lang, k="alpha", v=a)
+    if key in ("cloud", "rgb", "cloudrgb", "color", "colour"):
+        parts = [p for p in re.split(r"[,\s]+", val_all) if p]
+        try:
+            rgb = [int(p) for p in parts]
+            assert len(rgb) == 3 and all(0 <= x <= 255 for x in rgb)
+        except (ValueError, AssertionError):
+            return tr("mapset_rgb_usage", lang)
+        set_map_cfg(chat_id, "cloud_rgb", rgb)
+        return tr("mapset_set", lang, k="cloud", v=",".join(map(str, rgb)))
+    if key in ("zoom", "z"):
+        try:
+            zz = int(val); assert 3 <= zz <= 7
+        except (ValueError, AssertionError):
+            return tr("mapset_zoom_usage", lang)
+        set_map_cfg(chat_id, "zoom", zz)
+        return tr("mapset_set", lang, k="zoom", v=zz)
+    if key in ("reset", "default", "defaults"):
+        reset_map_cfg(chat_id)
+        return tr("mapset_reset", lang)
+    return tr("mapset_unknown", lang, k=key)
 
 # --- Command router (easy to extend) ---
 COMMANDS = {
@@ -1773,7 +1898,7 @@ COMMANDS = {
     "set": cmd_set, "units": cmd_units, "soil": cmd_soil, "hist": cmd_hist,
     "lang": cmd_lang, "anm": cmd_anm,
     "radar": cmd_radar, "sat": cmd_sat, "satelit": cmd_sat,
-    "map": cmd_map, "harta": cmd_map,
+    "map": cmd_map, "harta": cmd_map, "mapset": cmd_mapset, "hartaset": cmd_mapset,
     "start": cmd_start, "help": cmd_start,
 }
 
