@@ -100,7 +100,7 @@ DAILY_MAX = 16  # Open-Meteo daily forecast horizon
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 # --- Alert configuration (edit thresholds here) ---
-CHECK_INTERVAL_SEC = int(os.environ.get("TG_ALERT_INTERVAL", "1800"))  # 30 min
+CHECK_INTERVAL_SEC = int(os.environ.get("TG_ALERT_INTERVAL", "900"))  # 30 min
 ALERT_WINDOW_H = 12          # how many hours ahead to scan
 GUST_KMH = 60                # strong wind gusts
 RAIN_MM_H = 4.0              # heavy rain per hour
@@ -442,10 +442,12 @@ T = {
     "anm_valid": {"en": "valid: {v}", "ro": "valabil: {v}"},
     "anm_src": {"en": "source: meteoromania.ro (ANM)", "ro": "sursa: meteoromania.ro (ANM)"},
     "cap_radar": {"en": "Radar", "ro": "Radar"},
-    "radar_natl": {"en": "national (ANM)", "ro": "național (ANM)"},
-    "cap_sat": {"en": "Satellite", "ro": "Satelit"},
-    "cap_map": {"en": "Radar + Satellite", "ro": "Radar + Satelit"},
+    "cap_sat": {"en": "Cloud cover", "ro": "Acoperire nori"},
+    "cap_map": {"en": "Clouds + Radar", "ro": "Nori + Radar"},
     "map_src": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
+    "map_src_radar": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
+    "map_src_clouds": {"en": "source: Open-Meteo, \u00a9 OpenStreetMap", "ro": "sursa: Open-Meteo, \u00a9 OpenStreetMap"},
+    "map_src_both": {"en": "source: Open-Meteo + RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: Open-Meteo + RainViewer, \u00a9 OpenStreetMap"},
     "map_nopil": {"en": "Image maps need Pillow: <code>pip install pillow</code>",
                   "ro": "Hartile necesita Pillow: <code>pip install pillow</code>"},
     "map_nodata": {"en": "No map data available right now.", "ro": "Fara date de harta momentan."},
@@ -1007,8 +1009,14 @@ TILE = 256
 MAP_ZOOM = int(os.environ.get("TG_MAP_ZOOM", "6"))     # regional view (RainViewer max 7)
 MAP_W = int(os.environ.get("TG_MAP_W", "720"))
 MAP_H = int(os.environ.get("TG_MAP_H", "720"))
+MAP_BASE_DIM = float(os.environ.get("TG_MAP_BASE_DIM", "0.55"))  # 0=OSM full color, 1=white-out
 OSM_TILE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 RAINVIEWER_INDEX = "https://api.rainviewer.com/public/weather-maps.json"
+# Cloud cover comes from Open-Meteo (RainViewer's free tier has no satellite):
+CLOUD_URL = "https://api.open-meteo.com/v1/forecast"
+CLOUD_COLS = int(os.environ.get("TG_CLOUD_COLS", "14"))
+CLOUD_ROWS = int(os.environ.get("TG_CLOUD_ROWS", "12"))
+CLOUD_MAX_ALPHA = int(os.environ.get("TG_CLOUD_ALPHA", "210"))   # opacity at 100% overcast
 _TILE_UA = {"User-Agent": "OpenMeteoBot/1.0 (personal weather bot)"}
 _rv_cache = {"t": 0, "data": None}
 
@@ -1023,6 +1031,13 @@ def lonlat_to_tilexy(lat, lon, z):
     x = (lon + 180.0) / 360.0 * n
     y = (1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n
     return x, y
+
+def tilexy_to_lonlat(x, y, z):
+    """Inverse of lonlat_to_tilexy -> (lat, lon)."""
+    n = 2 ** z
+    lon = x / n * 360.0 - 180.0
+    lat = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * y / n))))
+    return lat, lon
 
 def rainviewer_frames():
     """Cached RainViewer index -> latest radar & satellite tile paths."""
@@ -1067,8 +1082,47 @@ def _overlay_url(frames, layer, z, x, y):
         return f"{host}{path}/{TILE}/{z}/{x}/{y}/4/1_1.png"      # color 4, smooth+snow
     return f"{host}{path}/{TILE}/{z}/{x}/{y}/0/0_0.png"          # satellite
 
-def build_map(lat, lon, layers, z=None, w=None, h=None):
-    """Stitch OSM base + RainViewer overlays, centered on the point, with a marker.
+def _cloud_overlay(bbox, w, h):
+    """White cloud-cover overlay from Open-Meteo cloud_cover sampled on a grid over
+    bbox=(latN, lonW, latS, lonE). Returns (RGBA_overlay, 'HH:MM') or (None, '')."""
+    latN, lonW, latS, lonE = bbox
+    lats, lons = [], []
+    for r in range(CLOUD_ROWS):
+        lat = latN + (latS - latN) * (r + 0.5) / CLOUD_ROWS      # row 0 = north (top)
+        for c in range(CLOUD_COLS):
+            lon = lonW + (lonE - lonW) * (c + 0.5) / CLOUD_COLS
+            lats.append(round(lat, 4)); lons.append(round(lon, 4))
+    try:
+        rr = requests.get(CLOUD_URL, params={
+            "latitude": ",".join(map(str, lats)),
+            "longitude": ",".join(map(str, lons)),
+            "current": "cloud_cover", "timezone": "UTC",
+        }, timeout=20, headers=_TILE_UA)
+        rr.raise_for_status()
+        data = rr.json()
+    except (requests.RequestException, ValueError):
+        return None, ""
+    results = data if isinstance(data, list) else [data]
+    grid = Image.new("RGBA", (CLOUD_COLS, CLOUD_ROWS), (0, 0, 0, 0))
+    px = grid.load()
+    tstamp = ""
+    for i, res in enumerate(results):
+        cur = res.get("current", {}) if isinstance(res, dict) else {}
+        if not tstamp:
+            tstamp = cur.get("time", "")
+        cc = cur.get("cloud_cover")
+        c, row = i % CLOUD_COLS, i // CLOUD_COLS
+        if cc is None or row >= CLOUD_ROWS:
+            continue
+        a = int(CLOUD_MAX_ALPHA * max(0.0, min(100.0, float(cc))) / 100.0)
+        px[c, row] = (245, 245, 245, a)                          # near-white clouds
+    overlay = grid.resize((w, h), Image.BICUBIC)                 # smooth field
+    return overlay, (tstamp[-5:] if len(tstamp) >= 5 else "")    # 'HH:MM'
+
+def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0):
+    """Stitch OSM base + weather overlays, centered on the point, with a marker.
+    `layers` items: 'radar'/'satellite' (RainViewer tiles) or 'clouds' (Open-Meteo).
+    `base_dim` (0..1) washes out the OSM base so weather stands out.
     Returns (png_bytes, time_label) or (None, '')."""
     if not _PIL:
         return None, ""
@@ -1076,7 +1130,9 @@ def build_map(lat, lon, layers, z=None, w=None, h=None):
     w = w or MAP_W
     h = h or MAP_H
     n = 2 ** z
-    frames = rainviewer_frames()
+    need_rv = any(l in ("radar", "satellite") for l in layers)
+    frames = rainviewer_frames() if need_rv else {
+        "host": "", "radar": None, "satellite": None, "radar_time": 0, "sat_time": 0}
     fx, fy = lonlat_to_tilexy(lat, lon, z)
     cpx, cpy = fx * TILE, fy * TILE
     left, top = cpx - w / 2.0, cpy - h / 2.0
@@ -1106,8 +1162,19 @@ def build_map(lat, lon, layers, z=None, w=None, h=None):
             canvas.alpha_composite(layer_img)             # dest (0,0) -> valid
 
     paste_layer(lambda x, y: _fetch_img(OSM_TILE.format(z=z, x=x, y=y)), False)
+    if base_dim > 0:                                  # fade the base map
+        canvas.alpha_composite(Image.new("RGBA", (w, h), (255, 255, 255, int(255 * min(1.0, base_dim)))))
     tlabel = ""
     for layer in layers:
+        if layer == "clouds":
+            latN, lonW = tilexy_to_lonlat(left / TILE, top / TILE, z)
+            latS, lonE = tilexy_to_lonlat((left + w) / TILE, (top + h) / TILE, z)
+            overlay, clabel = _cloud_overlay((latN, lonW, latS, lonE), w, h)
+            if overlay is not None:
+                canvas.alpha_composite(overlay)
+                if clabel and not tlabel:
+                    tlabel = clabel
+            continue
         url_of = lambda x, y, L=layer: _overlay_url(frames, L, z, x, y)
         paste_layer(lambda x, y: _fetch_img(url_of(x, y)) if url_of(x, y) else None, True)
         ts = frames.get("radar_time" if layer == "radar" else "sat_time")
@@ -1123,43 +1190,6 @@ def build_map(lat, lon, layers, z=None, w=None, h=None):
     buf = BytesIO()
     canvas.convert("RGB").save(buf, format="PNG")
     return buf.getvalue(), tlabel
-
-# --- ANM national radar image (meteoromania.ro, same source as ANM) --------------
-# Filenames embed a UTC timestamp, e.g. mos.live.20260728.0441.0_mercator.png,
-# refreshed every 10 min at minute ~:01. We probe backwards until one exists.
-ANM_RADAR_URL = os.environ.get(
-    "TG_ANM_RADAR_URL",
-    "https://www.meteoromania.ro/radar/mos.live.{date}.{hm}.0_mercator.png")
-ANM_RADAR_OFFSET_MIN = int(os.environ.get("TG_ANM_RADAR_OFFSET", "1"))   # minute past each 10-min slot
-ANM_RADAR_LOOKBACK = int(os.environ.get("TG_ANM_RADAR_LOOKBACK", "9"))   # 10-min slots to try back (~90 min)
-_anm_radar_cache = {"t": 0, "png": None, "label": ""}
-
-def _anm_radar_candidates(now=None):
-    """UTC timestamps to try, newest first: minute floored to 10 + OFFSET, then back.
-    Skips the current slot if its image isn't due yet (offset minutes not elapsed)."""
-    now = (now or datetime.now(timezone.utc)).replace(second=0, microsecond=0)
-    base = now.replace(minute=(now.minute // 10) * 10)
-    if base + timedelta(minutes=ANM_RADAR_OFFSET_MIN) > now:
-        base -= timedelta(minutes=10)          # current slot's image not out yet
-    return [base - timedelta(minutes=10 * i) + timedelta(minutes=ANM_RADAR_OFFSET_MIN)
-            for i in range(ANM_RADAR_LOOKBACK + 1)]
-
-def anm_radar_image():
-    """Latest ANM national radar PNG. Returns (png_bytes, 'HH:MM') or (None, '')."""
-    now = time.time()
-    if _anm_radar_cache["png"] and now - _anm_radar_cache["t"] < 300:
-        return _anm_radar_cache["png"], _anm_radar_cache["label"]
-    for ts in _anm_radar_candidates():
-        url = ANM_RADAR_URL.format(date=ts.strftime("%Y%m%d"), hm=ts.strftime("%H%M"))
-        try:
-            r = requests.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0"})
-        except requests.RequestException:
-            continue
-        if r.status_code == 200 and r.content and "image" in r.headers.get("Content-Type", "").lower():
-            label = ts.strftime("%H:%M")
-            _anm_radar_cache.update(t=now, png=r.content, label=label)
-            return r.content, label
-    return None, ""
 
 def already_sent(chat_id, key):
     return key in load_state().get(str(chat_id), {}).get("alerts_sent", {})
@@ -1482,9 +1512,9 @@ HELP = {
         "<code>soil Orsova</code> \u2014 soil moisture + temperature now\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 past weather for a period\n\n"
         "<b>Maps</b>\n"
-        "<code>radar</code> \u2014 national radar (ANM)\n"
-        "<code>sat Orsova</code> \u2014 satellite map\n"
-        "<code>map Orsova</code> \u2014 radar + satellite\n\n"
+        "<code>radar Orsova</code> \u2014 radar over a faded map\n"
+        "<code>sat Orsova</code> \u2014 cloud cover\n"
+        "<code>map Orsova</code> \u2014 clouds + radar\n\n"
         "<b>Model</b>\n"
         "<code>model</code> \u2014 show the current model and the list of models\n"
         "<code>model iconeu</code> \u2014 set the default model (name from the list)\n\n"
@@ -1522,9 +1552,9 @@ HELP = {
         "<code>soil Orsova</code> \u2014 umiditatea solului + temperatura acum\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 vremea din trecut pe o perioada\n\n"
         "<b>Harti</b>\n"
-        "<code>radar</code> \u2014 harta radar nationala (ANM)\n"
-        "<code>sat Orsova</code> \u2014 harta satelit\n"
-        "<code>map Orsova</code> \u2014 radar + satelit\n\n"
+        "<code>radar Orsova</code> \u2014 radar peste harta estompata\n"
+        "<code>sat Orsova</code> \u2014 acoperire cu nori\n"
+        "<code>map Orsova</code> \u2014 nori + radar\n\n"
         "<b>Model</b>\n"
         "<code>model</code> \u2014 arata modelul curent si lista de modele\n"
         "<code>model iconeu</code> \u2014 seteaza modelul implicit (nume din lista)\n\n"
@@ -1587,7 +1617,7 @@ def cmd_anm(args, chat_id):
     set_anm_feeds(chat_id, feeds)
     return tr("anm_set", lang, feeds=", ".join(feeds))
 
-def _map_cmd(args, chat_id, layers, label_key):
+def _map_cmd(args, chat_id, layers, label_key, base_dim=0.0, src_key="map_src"):
     lang = get_lang(chat_id)
     if not _PIL:
         return tr("map_nopil", lang)
@@ -1597,33 +1627,28 @@ def _map_cmd(args, chat_id, layers, label_key):
     if err:
         return err
     try:
-        png, tlabel = build_map(loc["lat"], loc["lon"], layers)
+        png, tlabel = build_map(loc["lat"], loc["lon"], layers, base_dim=base_dim)
     except Exception as e:
         return tr("err_generic", lang, e=e)
     if not png:
         return tr("map_nodata", lang)
     cap = f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 {tr(label_key, lang)}"
-    cap += ("\n" + (f"{tlabel} UTC \u00b7 " if tlabel else "") + tr("map_src", lang))
+    cap += ("\n" + (f"{tlabel} UTC \u00b7 " if tlabel else "") + tr(src_key, lang))
     return Photo(png, cap)
 
 def cmd_radar(args, chat_id):
-    # National radar straight from ANM (meteoromania.ro) — one image, no location.
-    lang = get_lang(chat_id)
-    try:
-        png, tlabel = anm_radar_image()
-    except Exception as e:
-        return tr("err_generic", lang, e=e)
-    if not png:
-        return tr("map_nodata", lang)
-    cap = f"\U0001f4e1 <b>{tr('cap_radar', lang)}</b> — {tr('radar_natl', lang)}"
-    cap += "\n" + (f"{tlabel} UTC · " if tlabel else "") + tr("anm_src", lang)
-    return Photo(png, cap)
+    # Radar over a faded OSM base so borders/coastlines show; radar stays prominent.
+    return _map_cmd(args, chat_id, ["radar"], "cap_radar",
+                    base_dim=MAP_BASE_DIM, src_key="map_src_radar")
 
 def cmd_sat(args, chat_id):
-    return _map_cmd(args, chat_id, ["satellite"], "cap_sat")
+    # Cloud cover from Open-Meteo (RainViewer's free tier has no satellite).
+    return _map_cmd(args, chat_id, ["clouds"], "cap_sat",
+                    base_dim=MAP_BASE_DIM, src_key="map_src_clouds")
 
 def cmd_map(args, chat_id):
-    return _map_cmd(args, chat_id, ["satellite", "radar"], "cap_map")
+    return _map_cmd(args, chat_id, ["clouds", "radar"], "cap_map",
+                    base_dim=MAP_BASE_DIM, src_key="map_src_both")
 
 # --- Command router (easy to extend) ---
 COMMANDS = {
