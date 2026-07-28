@@ -430,8 +430,9 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `radar` | National radar image from ANM, over a faded map |
 | `sat Orsova` | Cloud cover (Open-Meteo) over a faded map |
 | `map Orsova` | Clouds + radar combined |
-| `mapset` | Map settings (radar source, dim, cloud colour/opacity, zoom, time zone, ANM bbox) |
+| `mapset` | Map settings (radar source, dim, cloud colour/opacity, zoom, time zone) |
 | `alarm 1 21:05` / `alarm off` | Daily 24h forecast for a saved slot at a set time |
+| `interval 10` | Set how often alerts are checked, in minutes (global) |
 | `model` / `model iconeu` | Show / set the weather model |
 | `save 1 Orsova` | Save a location in slot 1 |
 | `locs` | List saved locations |
@@ -442,7 +443,9 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `lang ro` / `lang en` | Switch language (auto-detected from the phone on Telegram) |
 | `anm nowcasting,general` / `anm off` | Official ANM warnings by exact point (nowcasting and/or county-level) |
 
-Alerts for saved locations are sent **automatically** (checked every 15 min).
+Alerts for saved locations are sent **automatically** (checked every 15 min by
+default; change it live with `interval 10` — minutes — or the `TG_ALERT_INTERVAL`
+env var). Both Open-Meteo threshold alerts and ANM warnings use this same interval.
 Identical ANM warnings are de-duplicated by content, so the same bulletin is not
 resent on every cycle.
 
@@ -464,8 +467,10 @@ resent on every cycle.
   | cloud opacity | `mapset alpha 225` | 0..255 at 100% overcast |
   | zoom | `mapset zoom 6` | RainViewer map zoom (3..7) |
   | **time zone** | `mapset tz Europe/Bucharest` / `mapset tz +3` / `mapset tz auto` | Local time on map captions (default: server time) |
-  | ANM bbox | `mapset bbox 17.9727,42.0465,31.4767,49.1441` | Geo bounds of the ANM radar image (W,S,E,N) |
   | reset | `mapset reset` | Back to defaults |
+
+  The ANM radar image geo-bounds are fixed in the code (correct national extent),
+  overridable only via the `TG_ANM_BBOX` env var if ever needed.
 
 ### Daily forecast alarm (`alarm`)
 

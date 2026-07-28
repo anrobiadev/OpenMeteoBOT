@@ -232,7 +232,6 @@ def get_map_cfg(chat_id):
         "cloud_alpha": CLOUD_MAX_ALPHA, # 0..255 opacity at 100% overcast
         "cloud_rgb": list(CLOUD_RGB),   # [r, g, b] of the cloud shading
         "zoom": MAP_ZOOM,               # RainViewer map zoom (3..7)
-        "anm_bbox": list(ANM_BBOX),     # [W, S, E, N] geo bounds of the ANM radar image
         "tz": "",                       # map time zone: '' = server local, offset (+3) or IANA
     }
     cfg.update(load_state().get(str(chat_id), {}).get("map", {}))
@@ -246,6 +245,16 @@ def set_map_cfg(chat_id, key, value):
 def reset_map_cfg(chat_id):
     def m(state):
         state.setdefault(str(chat_id), {}).pop("map", None)
+    update_state(m)
+
+# --- Global alert-check interval (seconds), stored under a reserved state key ---
+def get_alert_interval():
+    v = load_state().get("_config", {}).get("alert_interval")
+    return int(v) if isinstance(v, int) and v >= 60 else CHECK_INTERVAL_SEC
+
+def set_alert_interval(seconds):
+    def m(state):
+        state.setdefault("_config", {})["alert_interval"] = int(seconds)
     update_state(m)
 
 def fmt_pressure(hpa, unit):
@@ -516,24 +525,22 @@ T = {
                "<code>alpha</code> cloud opacity: <b>{alpha}</b>  (0..255)\n"
                "<code>cloud</code> colour RGB: <b>{rgb}</b>\n"
                "<code>zoom</code> map zoom: <b>{zoom}</b>  (3..7)\n"
-               "<code>tz</code> map time zone: <b>{tz}</b>\n"
-               "<code>bbox</code> ANM radar bounds W,S,E,N: <b>{bbox}</b>\n\n"
+               "<code>tz</code> map time zone: <b>{tz}</b>\n\n"
                "Change e.g.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
                "<code>mapset alpha 225</code> | <code>mapset cloud 105,105,105</code> | "
                "<code>mapset zoom 6</code> | <code>mapset tz Europe/Bucharest</code> | "
-               "<code>mapset bbox 20.1,42.2,29.8,49.6</code> | <code>mapset reset</code>"),
+               "<code>mapset reset</code>"),
         "ro": ("<b>Setari harta</b>\n"
                "<code>radar</code> sursa: <b>{src}</b>  (anm | rainviewer)\n"
                "<code>dim</code> estompare fundal: <b>{dim}</b>  (0..1)\n"
                "<code>alpha</code> opacitate nori: <b>{alpha}</b>  (0..255)\n"
                "<code>cloud</code> culoare RGB: <b>{rgb}</b>\n"
                "<code>zoom</code> zoom harta: <b>{zoom}</b>  (3..7)\n"
-               "<code>tz</code> fus orar harta: <b>{tz}</b>\n"
-               "<code>bbox</code> limite radar ANM V,S,E,N: <b>{bbox}</b>\n\n"
+               "<code>tz</code> fus orar harta: <b>{tz}</b>\n\n"
                "Schimba ex.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
                "<code>mapset alpha 225</code> | <code>mapset cloud 105,105,105</code> | "
                "<code>mapset zoom 6</code> | <code>mapset tz Europe/Bucharest</code> | "
-               "<code>mapset bbox 20.1,42.2,29.8,49.6</code> | <code>mapset reset</code>"),
+               "<code>mapset reset</code>"),
     },
     "mapset_set": {"en": "Set <code>{k}</code> = <b>{v}</b>", "ro": "Setat <code>{k}</code> = <b>{v}</b>"},
     "mapset_reset": {"en": "Map settings reset to defaults.", "ro": "Setarile hartii au fost resetate."},
@@ -546,8 +553,6 @@ T = {
     "mapset_rgb_usage": {"en": "Use: <code>mapset cloud 105,105,105</code> (r,g,b 0..255)",
                          "ro": "Foloseste: <code>mapset cloud 105,105,105</code> (r,g,b 0..255)"},
     "mapset_zoom_usage": {"en": "Use: <code>mapset zoom 6</code> (3..7)", "ro": "Foloseste: <code>mapset zoom 6</code> (3..7)"},
-    "mapset_bbox_usage": {"en": "Use: <code>mapset bbox W,S,E,N</code> e.g. <code>mapset bbox 20.1,42.2,29.8,49.6</code> (W&lt;E, S&lt;N)",
-                          "ro": "Foloseste: <code>mapset bbox V,S,E,N</code> ex. <code>mapset bbox 20.1,42.2,29.8,49.6</code> (V&lt;E, S&lt;N)"},
     "mapset_tz_usage": {"en": "Use: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>",
                         "ro": "Foloseste: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>"},
     "alarm_none": {"en": "No alarms set. Add one: <code>alarm 1 21:05</code> (saved slot 1 at 21:05).",
@@ -562,6 +567,12 @@ T = {
     "alarm_usage": {"en": "Use: <code>alarm 1 21:05</code> | <code>alarm 1 off</code> | <code>alarm off</code>",
                     "ro": "Foloseste: <code>alarm 1 21:05</code> | <code>alarm 1 off</code> | <code>alarm off</code>"},
     "alarm_bad_time": {"en": "Time must be HH:MM (24h), e.g. <code>21:05</code>.", "ro": "Ora trebuie HH:MM (24h), ex. <code>21:05</code>."},
+    "interval_current": {"en": "Alert check interval: <b>{m} min</b> ({s}s). Change with <code>interval 10</code> (minutes).",
+                         "ro": "Interval verificare alerte: <b>{m} min</b> ({s}s). Schimba cu <code>interval 10</code> (minute)."},
+    "interval_set": {"en": "Alert check interval set to <b>{m} min</b> ({s}s). Applies to Telegram &amp; WhatsApp.",
+                     "ro": "Interval verificare alerte setat la <b>{m} min</b> ({s}s). Se aplica pe Telegram &amp; WhatsApp."},
+    "interval_usage": {"en": "Use: <code>interval 10</code> — minutes (min 1, max 1440).",
+                       "ro": "Foloseste: <code>interval 10</code> — minute (min 1, max 1440)."},
     "anm_off_word": {"en": "off", "ro": "oprit"},
     "anm_current": {
         "en": "ANM warnings: <b>{feeds}</b>\nSet with: <code>anm nowcasting,general</code> | <code>anm nowcasting</code> | <code>anm off</code>",
@@ -1863,7 +1874,7 @@ HELP = {
         "<code>radar</code> \u2014 national radar (ANM) over a faded map\n"
         "<code>sat Orsova</code> \u2014 cloud cover\n"
         "<code>map Orsova</code> \u2014 clouds + radar\n"
-        "<code>mapset</code> \u2014 map settings (radar source, dim, cloud colour/opacity, zoom, bbox)\n"
+        "<code>mapset</code> \u2014 map settings (radar source, dim, cloud colour/opacity, zoom)\n"
         "<code>mapset tz Europe/Bucharest</code> \u2014 local time on maps (or <code>+3</code> / <code>auto</code>)\n\n"
         "<b>Model</b>\n"
         "<code>model</code> \u2014 show the current model and the list of models\n"
@@ -1879,7 +1890,8 @@ HELP = {
         "<code>set gust 70</code> \u2014 change a threshold "
         "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n"
         "<code>anm</code> \u2014 official ANM warnings: <code>anm nowcasting,general</code> / <code>anm off</code>\n"
-        "<code>alarm 1 21:05</code> \u2014 daily 24h forecast for slot 1 at 21:05 (<code>alarm off</code>)\n\n"
+        "<code>alarm 1 21:05</code> \u2014 daily 24h forecast for slot 1 at 21:05 (<code>alarm off</code>)\n"
+        "<code>interval 10</code> \u2014 how often alerts are checked, in minutes\n\n"
         "<b>Units &amp; language</b>\n"
         "<code>units</code> \u2014 show current display units\n"
         "<code>units temp F</code> \u2014 set units (temp C/F, wind kmh/ms/mph/kn, "
@@ -1908,7 +1920,7 @@ HELP = {
         "<code>radar</code> \u2014 radar national (ANM) peste harta estompata\n"
         "<code>sat Orsova</code> \u2014 acoperire cu nori\n"
         "<code>map Orsova</code> \u2014 nori + radar\n"
-        "<code>mapset</code> \u2014 setari harta (sursa radar, estompare, culoare/opacitate nori, zoom, bbox)\n"
+        "<code>mapset</code> \u2014 setari harta (sursa radar, estompare, culoare/opacitate nori, zoom)\n"
         "<code>mapset tz Europe/Bucharest</code> \u2014 ora locala pe harti (sau <code>+3</code> / <code>auto</code>)\n\n"
         "<b>Model</b>\n"
         "<code>model</code> \u2014 arata modelul curent si lista de modele\n"
@@ -1924,7 +1936,8 @@ HELP = {
         "<code>set gust 70</code> \u2014 schimba un prag "
         "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n"
         "<code>anm</code> \u2014 avertizari oficiale ANM: <code>anm nowcasting,general</code> / <code>anm off</code>\n"
-        "<code>alarm 1 21:05</code> \u2014 prognoza zilnica 24h pentru slotul 1 la 21:05 (<code>alarm off</code>)\n\n"
+        "<code>alarm 1 21:05</code> \u2014 prognoza zilnica 24h pentru slotul 1 la 21:05 (<code>alarm off</code>)\n"
+        "<code>interval 10</code> \u2014 cat de des se verifica alertele, in minute\n\n"
         "<b>Unitati &amp; limba</b>\n"
         "<code>units</code> \u2014 arata unitatile de afisare curente\n"
         "<code>units temp F</code> \u2014 seteaza unitatile (temp C/F, wind kmh/ms/mph/kn, "
@@ -2012,7 +2025,7 @@ def cmd_radar(args, chat_id):
         mlat, mlon = loc["lat"], loc["lon"]
     try:
         png, tlabel = build_anm_radar_map(mlat, mlon, base_dim=cfg["base_dim"],
-                                          bbox=tuple(cfg["anm_bbox"]), tz=cfg.get("tz", ""))
+                                          tz=cfg.get("tz", ""))
     except Exception as e:
         return tr("err_generic", lang, e=e)
     if not png:
@@ -2036,8 +2049,7 @@ def cmd_mapset(args, chat_id):
         return tr("mapset_current", lang,
                   src=cfg["radar_src"], dim=f"{cfg['base_dim']:g}",
                   alpha=cfg["cloud_alpha"], rgb=",".join(map(str, cfg["cloud_rgb"])),
-                  zoom=cfg["zoom"], bbox=",".join(f"{x:g}" for x in cfg["anm_bbox"]),
-                  tz=(cfg.get("tz") or "auto (server)"))
+                  zoom=cfg["zoom"], tz=(cfg.get("tz") or "auto (server)"))
     key = args[0].lower()
     rest = args[1:]
     val = rest[0] if rest else ""
@@ -2082,17 +2094,6 @@ def cmd_mapset(args, chat_id):
             return tr("mapset_zoom_usage", lang)
         set_map_cfg(chat_id, "zoom", zz)
         return tr("mapset_set", lang, k="zoom", v=zz)
-    if key in ("bbox", "bounds"):
-        parts = [p for p in re.split(r"[,\s]+", val_all) if p]
-        try:
-            bb = [float(p) for p in parts]           # order: W, S, E, N
-            assert len(bb) == 4 and bb[0] < bb[2] and bb[1] < bb[3]
-            assert -30 <= bb[0] <= 60 and -30 <= bb[2] <= 60
-            assert 20 <= bb[1] <= 70 and 20 <= bb[3] <= 70
-        except (ValueError, AssertionError):
-            return tr("mapset_bbox_usage", lang)
-        set_map_cfg(chat_id, "anm_bbox", bb)
-        return tr("mapset_set", lang, k="bbox", v=",".join(f"{x:g}" for x in bb))
     if key in ("tz", "timezone", "fus"):
         v = val.strip()
         if v.lower() in ("auto", "server", "local", "reset", ""):
@@ -2211,6 +2212,21 @@ def alarm_loop():
             print("Alarm loop error:", e)
         time.sleep(30)
 
+def cmd_interval(args, chat_id):
+    """Show/set the background alert-check interval (in minutes; applies to everyone)."""
+    lang = get_lang(chat_id)
+    cur = get_alert_interval()
+    if not args:
+        return tr("interval_current", lang, m=cur // 60, s=cur)
+    try:
+        mins = int(args[0])
+        assert mins >= 1
+    except (ValueError, AssertionError):
+        return tr("interval_usage", lang)
+    mins = min(mins, 1440)                     # cap at 24h
+    set_alert_interval(mins * 60)
+    return tr("interval_set", lang, m=mins, s=mins * 60)
+
 # --- Command router (easy to extend) ---
 COMMANDS = {
     "wx": cmd_wx, "model": cmd_model,
@@ -2218,6 +2234,7 @@ COMMANDS = {
     "set": cmd_set, "units": cmd_units, "soil": cmd_soil, "hist": cmd_hist,
     "air": cmd_air, "aer": cmd_air, "flood": cmd_flood, "inundatii": cmd_flood,
     "lang": cmd_lang, "anm": cmd_anm, "alarm": cmd_alarm, "alarma": cmd_alarm,
+    "interval": cmd_interval,
     "radar": cmd_radar, "sat": cmd_sat, "satelit": cmd_sat,
     "map": cmd_map, "harta": cmd_map, "mapset": cmd_mapset, "hartaset": cmd_mapset,
     "start": cmd_start, "help": cmd_start,
@@ -2336,14 +2353,14 @@ def alert_loop():
                         send(chat_id, build_alert_message(loc, new_msgs, model_label, lang))
         except Exception as e:
             print("Alert loop error:", e)
-        time.sleep(CHECK_INTERVAL_SEC)
+        time.sleep(get_alert_interval())
 
 def main():
     if not BOT_TOKEN:
         raise SystemExit("Set the TG_BOT_TOKEN environment variable (token from @BotFather).")
     threading.Thread(target=alert_loop, daemon=True).start()
     threading.Thread(target=alarm_loop, daemon=True).start()
-    print(f"Bot started. Alert check every {CHECK_INTERVAL_SEC}s. Waiting for messages...")
+    print(f"Bot started. Alert check every {get_alert_interval()}s. Waiting for messages...")
     offset = None
     while True:
         try:

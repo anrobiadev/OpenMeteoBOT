@@ -114,7 +114,7 @@ def alert_loop():
                         wa_send(chat_id, to_whatsapp(msg))
         except Exception as e:
             print("Alert loop error:", e)
-        time.sleep(core.CHECK_INTERVAL_SEC)
+        time.sleep(core.get_alert_interval())
 
 
 def alarm_loop():
@@ -131,7 +131,7 @@ def alarm_loop():
 def main():
     threading.Thread(target=alert_loop, daemon=True).start()
     threading.Thread(target=alarm_loop, daemon=True).start()
-    print(f"WhatsApp Python service on :{PY_PORT}, alerts every {core.CHECK_INTERVAL_SEC}s")
+    print(f"WhatsApp Python service on :{PY_PORT}, alerts every {core.get_alert_interval()}s")
     app.run(host="127.0.0.1", port=PY_PORT)
 
 
