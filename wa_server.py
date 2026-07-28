@@ -61,8 +61,10 @@ def incoming():
     except Exception as e:
         reply = f"Error: {e}"
     if isinstance(reply, core.Photo):          # map/radar/sat -> send an image
+        print(f"[incoming] {text!r} -> image ({len(reply.data)} bytes)")
         return jsonify({"image": base64.b64encode(reply.data).decode(),
                         "caption": to_whatsapp(reply.caption)})
+    print(f"[incoming] {text!r} -> text ({len(reply) if reply else 0} chars)")
     return jsonify({"reply": to_whatsapp(reply) if reply else ""})
 
 

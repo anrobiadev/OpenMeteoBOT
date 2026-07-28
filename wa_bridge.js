@@ -78,19 +78,35 @@ async function start() {
       if (!allowed) continue;
       if (!text.trim()) continue;
       try {
-        // Map/radar/sat build an image on the Python side, which can be slow.
-        const res = await axios.post(PY_URL, { from: jid, text }, { timeout: 60000 });
+        // Map/radar/sat build an image on the Python side, which can be slow and
+        // returns a large base64 body -> disable axios size limits + long timeout.
+        const res = await axios.post(PY_URL, { from: jid, text }, {
+          timeout: 60000,
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+        });
         const data = res.data || {};
         if (data.image) {                        // Photo reply (map/radar/sat)
           const buf = Buffer.from(data.image, 'base64');
           console.log(`[out] image bytes=${buf.length}`);
-          await sock.sendMessage(jid, { image: buf, caption: data.caption || '' });
+          try {
+            await sock.sendMessage(jid, {
+              image: buf,
+              mimetype: 'image/png',
+              caption: data.caption || '',
+            });
+          } catch (imgErr) {                     // fall back to text so something arrives
+            console.error('Image send failed:', imgErr.message);
+            if (data.caption) await sock.sendMessage(jid, { text: data.caption });
+          }
         } else if (data.reply) {                 // text reply
           console.log(`[out] replyLen=${data.reply.length}`);
           await sock.sendMessage(jid, { text: data.reply });
+        } else {
+          console.log('[out] empty response from Python:', JSON.stringify(data).slice(0, 200));
         }
       } catch (e) {
-        console.error('Python error:', e.message);
+        console.error('Python error:', e.message, e.response ? `(status ${e.response.status})` : '');
       }
     }
   });
