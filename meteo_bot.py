@@ -1016,7 +1016,8 @@ RAINVIEWER_INDEX = "https://api.rainviewer.com/public/weather-maps.json"
 CLOUD_URL = "https://api.open-meteo.com/v1/forecast"
 CLOUD_COLS = int(os.environ.get("TG_CLOUD_COLS", "14"))
 CLOUD_ROWS = int(os.environ.get("TG_CLOUD_ROWS", "12"))
-CLOUD_MAX_ALPHA = int(os.environ.get("TG_CLOUD_ALPHA", "210"))   # opacity at 100% overcast
+CLOUD_MAX_ALPHA = int(os.environ.get("TG_CLOUD_ALPHA", "225"))   # opacity at 100% overcast
+CLOUD_RGB = tuple(int(x) for x in os.environ.get("TG_CLOUD_RGB", "105,105,105").split(","))[:3]
 _TILE_UA = {"User-Agent": "OpenMeteoBot/1.0 (personal weather bot)"}
 _rv_cache = {"t": 0, "data": None}
 
@@ -1115,7 +1116,7 @@ def _cloud_overlay(bbox, w, h):
         if cc is None or row >= CLOUD_ROWS:
             continue
         a = int(CLOUD_MAX_ALPHA * max(0.0, min(100.0, float(cc))) / 100.0)
-        px[c, row] = (245, 245, 245, a)                          # near-white clouds
+        px[c, row] = CLOUD_RGB + (a,)                            # grey clouds (darker = denser)
     overlay = grid.resize((w, h), Image.BICUBIC)                 # smooth field
     return overlay, (tstamp[-5:] if len(tstamp) >= 5 else "")    # 'HH:MM'
 
