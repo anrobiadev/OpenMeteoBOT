@@ -230,6 +230,7 @@ def get_map_cfg(chat_id):
         "cloud_alpha": CLOUD_MAX_ALPHA, # 0..255 opacity at 100% overcast
         "cloud_rgb": list(CLOUD_RGB),   # [r, g, b] of the cloud shading
         "zoom": MAP_ZOOM,               # RainViewer map zoom (3..7)
+        "anm_bbox": list(ANM_BBOX),     # [W, S, E, N] geo bounds of the ANM radar image
     }
     cfg.update(load_state().get(str(chat_id), {}).get("map", {}))
     return cfg
@@ -482,19 +483,23 @@ T = {
                "<code>dim</code> base fade: <b>{dim}</b>  (0..1)\n"
                "<code>alpha</code> cloud opacity: <b>{alpha}</b>  (0..255)\n"
                "<code>cloud</code> colour RGB: <b>{rgb}</b>\n"
-               "<code>zoom</code> map zoom: <b>{zoom}</b>  (3..7)\n\n"
+               "<code>zoom</code> map zoom: <b>{zoom}</b>  (3..7)\n"
+               "<code>bbox</code> ANM radar bounds W,S,E,N: <b>{bbox}</b>\n\n"
                "Change e.g.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
                "<code>mapset alpha 225</code> | <code>mapset cloud 105,105,105</code> | "
-               "<code>mapset zoom 6</code> | <code>mapset reset</code>"),
+               "<code>mapset zoom 6</code> | <code>mapset bbox 20.1,42.2,29.8,49.6</code> | "
+               "<code>mapset reset</code>"),
         "ro": ("<b>Setari harta</b>\n"
                "<code>radar</code> sursa: <b>{src}</b>  (anm | rainviewer)\n"
                "<code>dim</code> estompare fundal: <b>{dim}</b>  (0..1)\n"
                "<code>alpha</code> opacitate nori: <b>{alpha}</b>  (0..255)\n"
                "<code>cloud</code> culoare RGB: <b>{rgb}</b>\n"
-               "<code>zoom</code> zoom harta: <b>{zoom}</b>  (3..7)\n\n"
+               "<code>zoom</code> zoom harta: <b>{zoom}</b>  (3..7)\n"
+               "<code>bbox</code> limite radar ANM V,S,E,N: <b>{bbox}</b>\n\n"
                "Schimba ex.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
                "<code>mapset alpha 225</code> | <code>mapset cloud 105,105,105</code> | "
-               "<code>mapset zoom 6</code> | <code>mapset reset</code>"),
+               "<code>mapset zoom 6</code> | <code>mapset bbox 20.1,42.2,29.8,49.6</code> | "
+               "<code>mapset reset</code>"),
     },
     "mapset_set": {"en": "Set <code>{k}</code> = <b>{v}</b>", "ro": "Setat <code>{k}</code> = <b>{v}</b>"},
     "mapset_reset": {"en": "Map settings reset to defaults.", "ro": "Setarile hartii au fost resetate."},
@@ -507,6 +512,8 @@ T = {
     "mapset_rgb_usage": {"en": "Use: <code>mapset cloud 105,105,105</code> (r,g,b 0..255)",
                          "ro": "Foloseste: <code>mapset cloud 105,105,105</code> (r,g,b 0..255)"},
     "mapset_zoom_usage": {"en": "Use: <code>mapset zoom 6</code> (3..7)", "ro": "Foloseste: <code>mapset zoom 6</code> (3..7)"},
+    "mapset_bbox_usage": {"en": "Use: <code>mapset bbox W,S,E,N</code> e.g. <code>mapset bbox 20.1,42.2,29.8,49.6</code> (W&lt;E, S&lt;N)",
+                          "ro": "Foloseste: <code>mapset bbox V,S,E,N</code> ex. <code>mapset bbox 20.1,42.2,29.8,49.6</code> (V&lt;E, S&lt;N)"},
     "anm_off_word": {"en": "off", "ro": "oprit"},
     "anm_current": {
         "en": "ANM warnings: <b>{feeds}</b>\nSet with: <code>anm nowcasting,general</code> | <code>anm nowcasting</code> | <code>anm off</code>",
@@ -1321,8 +1328,8 @@ def _osm_base_for_bbox(W, S, E, N, out_w):
             canvas.paste(img, (int(round(tx * TILE - wx0)), int(round(ty * TILE - wy0))))
     return canvas, (w, h), (nx0, ny0, (nx1 - nx0), (ny1 - ny0))
 
-def build_anm_radar_map(mlat=None, mlon=None, base_dim=None):
-    """ANM national radar stretched onto a faded OSM base (georeferenced by ANM_BBOX).
+def build_anm_radar_map(mlat=None, mlon=None, base_dim=None, bbox=None):
+    """ANM national radar stretched onto a faded OSM base (georeferenced by bbox).
     Optional marker at (mlat, mlon). Returns (png_bytes, 'HH:MM') or (None, '')."""
     if not _PIL:
         return None, ""
@@ -1330,7 +1337,7 @@ def build_anm_radar_map(mlat=None, mlon=None, base_dim=None):
     png_bytes, label = anm_radar_image()
     if not png_bytes:
         return None, ""
-    W, S, E, N = ANM_BBOX
+    W, S, E, N = bbox if bbox else ANM_BBOX
     base, (w, h), (nx0, ny0, dnx, dny) = _osm_base_for_bbox(W, S, E, N, ANM_MAP_W)
     if base_dim > 0:                                           # fade the base
         base.alpha_composite(Image.new("RGBA", (w, h), (255, 255, 255, int(255 * min(1.0, base_dim)))))
@@ -1817,7 +1824,8 @@ def cmd_radar(args, chat_id):
             return err
         mlat, mlon = loc["lat"], loc["lon"]
     try:
-        png, tlabel = build_anm_radar_map(mlat, mlon, base_dim=cfg["base_dim"])
+        png, tlabel = build_anm_radar_map(mlat, mlon, base_dim=cfg["base_dim"],
+                                          bbox=tuple(cfg["anm_bbox"]))
     except Exception as e:
         return tr("err_generic", lang, e=e)
     if not png:
@@ -1841,7 +1849,7 @@ def cmd_mapset(args, chat_id):
         return tr("mapset_current", lang,
                   src=cfg["radar_src"], dim=f"{cfg['base_dim']:g}",
                   alpha=cfg["cloud_alpha"], rgb=",".join(map(str, cfg["cloud_rgb"])),
-                  zoom=cfg["zoom"])
+                  zoom=cfg["zoom"], bbox=",".join(f"{x:g}" for x in cfg["anm_bbox"]))
     key = args[0].lower()
     rest = args[1:]
     val = rest[0] if rest else ""
@@ -1886,6 +1894,17 @@ def cmd_mapset(args, chat_id):
             return tr("mapset_zoom_usage", lang)
         set_map_cfg(chat_id, "zoom", zz)
         return tr("mapset_set", lang, k="zoom", v=zz)
+    if key in ("bbox", "bounds"):
+        parts = [p for p in re.split(r"[,\s]+", val_all) if p]
+        try:
+            bb = [float(p) for p in parts]           # order: W, S, E, N
+            assert len(bb) == 4 and bb[0] < bb[2] and bb[1] < bb[3]
+            assert -30 <= bb[0] <= 60 and -30 <= bb[2] <= 60
+            assert 20 <= bb[1] <= 70 and 20 <= bb[3] <= 70
+        except (ValueError, AssertionError):
+            return tr("mapset_bbox_usage", lang)
+        set_map_cfg(chat_id, "anm_bbox", bb)
+        return tr("mapset_set", lang, k="bbox", v=",".join(f"{x:g}" for x in bb))
     if key in ("reset", "default", "defaults"):
         reset_map_cfg(chat_id)
         return tr("mapset_reset", lang)
