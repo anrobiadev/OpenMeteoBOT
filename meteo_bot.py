@@ -446,6 +446,7 @@ T = {
     "cap_map": {"en": "Clouds + Radar", "ro": "Nori + Radar"},
     "map_src": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_radar": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
+    "map_src_anm": {"en": "source: meteoromania.ro (ANM), \u00a9 OpenStreetMap", "ro": "sursa: meteoromania.ro (ANM), \u00a9 OpenStreetMap"},
     "map_src_clouds": {"en": "source: Open-Meteo, \u00a9 OpenStreetMap", "ro": "sursa: Open-Meteo, \u00a9 OpenStreetMap"},
     "map_src_both": {"en": "source: Open-Meteo + RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: Open-Meteo + RainViewer, \u00a9 OpenStreetMap"},
     "map_nopil": {"en": "Image maps need Pillow: <code>pip install pillow</code>",
@@ -1192,6 +1193,103 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0):
     canvas.convert("RGB").save(buf, format="PNG")
     return buf.getvalue(), tlabel
 
+# --- ANM national radar image, georeferenced over an OSM base --------------------
+# The ANM viewer draws the radar PNG as a Leaflet imageOverlay stretched to fixed
+# lat/lon bounds. We replicate that: build an OSM base for the SAME Web-Mercator
+# rectangle and stretch the radar onto it, so borders line up with ANM's own view.
+# BBOX order: West,South,East,North (lon/lat). Tune with TG_ANM_BBOX if borders drift.
+ANM_BBOX = tuple(float(x) for x in
+                 os.environ.get("TG_ANM_BBOX", "20.22,43.61,29.62,48.26").split(","))[:4]
+ANM_MAP_W = int(os.environ.get("TG_ANM_MAP_W", "1000"))        # output width in px
+ANM_RADAR_URL = os.environ.get(
+    "TG_ANM_RADAR_URL",
+    "https://www.meteoromania.ro/radar/mos.live.{date}.{hm}.0_mercator.png")
+ANM_RADAR_OFFSET_MIN = int(os.environ.get("TG_ANM_RADAR_OFFSET", "1"))
+ANM_RADAR_LOOKBACK = int(os.environ.get("TG_ANM_RADAR_LOOKBACK", "9"))
+_anm_radar_cache = {"t": 0, "png": None, "label": ""}
+
+def _anm_radar_candidates(now=None):
+    """UTC timestamps to try, newest first: minute floored to 10 + OFFSET, then back."""
+    now = (now or datetime.now(timezone.utc)).replace(second=0, microsecond=0)
+    base = now.replace(minute=(now.minute // 10) * 10)
+    if base + timedelta(minutes=ANM_RADAR_OFFSET_MIN) > now:
+        base -= timedelta(minutes=10)
+    return [base - timedelta(minutes=10 * i) + timedelta(minutes=ANM_RADAR_OFFSET_MIN)
+            for i in range(ANM_RADAR_LOOKBACK + 1)]
+
+def anm_radar_image():
+    """Latest ANM national radar PNG. Returns (png_bytes, 'HH:MM') or (None, '')."""
+    now = time.time()
+    if _anm_radar_cache["png"] and now - _anm_radar_cache["t"] < 300:
+        return _anm_radar_cache["png"], _anm_radar_cache["label"]
+    for ts in _anm_radar_candidates():
+        url = ANM_RADAR_URL.format(date=ts.strftime("%Y%m%d"), hm=ts.strftime("%H%M"))
+        try:
+            r = requests.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0"})
+        except requests.RequestException:
+            continue
+        if r.status_code == 200 and r.content and "image" in r.headers.get("Content-Type", "").lower():
+            label = ts.strftime("%H:%M")
+            _anm_radar_cache.update(t=now, png=r.content, label=label)
+            return r.content, label
+    return None, ""
+
+def _merc_y(lat):
+    return (1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0   # 0..1, north small
+
+def _osm_base_for_bbox(W, S, E, N, out_w):
+    """Stitch an OSM base covering the Web-Mercator rectangle of the bbox.
+    Returns (canvas, (w, h), (nx0, ny0, sx, sy)) where the tuple maps lon/lat to px."""
+    nx0, nx1 = (W + 180.0) / 360.0, (E + 180.0) / 360.0
+    ny0, ny1 = _merc_y(N), _merc_y(S)                          # top=north, bottom=south
+    z = int(round(math.log2(max(1.0, out_w / (TILE * (nx1 - nx0))))))
+    z = max(3, min(9, z))
+    n = 2 ** z
+    wx0, wx1 = nx0 * n * TILE, nx1 * n * TILE
+    wy0, wy1 = ny0 * n * TILE, ny1 * n * TILE
+    w, h = int(round(wx1 - wx0)), int(round(wy1 - wy0))
+    canvas = Image.new("RGBA", (w, h), (235, 235, 235, 255))
+    tx0, tx1 = math.floor(wx0 / TILE), math.floor(wx1 / TILE)
+    ty0, ty1 = math.floor(wy0 / TILE), math.floor(wy1 / TILE)
+    for tx in range(tx0, tx1 + 1):
+        for ty in range(ty0, ty1 + 1):
+            if ty < 0 or ty >= n:
+                continue
+            img = _fetch_img(OSM_TILE.format(z=z, x=tx % n, y=ty))
+            if not img:
+                continue
+            canvas.paste(img, (int(round(tx * TILE - wx0)), int(round(ty * TILE - wy0))))
+    return canvas, (w, h), (nx0, ny0, (nx1 - nx0), (ny1 - ny0))
+
+def build_anm_radar_map(mlat=None, mlon=None):
+    """ANM national radar stretched onto a faded OSM base (georeferenced by ANM_BBOX).
+    Optional marker at (mlat, mlon). Returns (png_bytes, 'HH:MM') or (None, '')."""
+    if not _PIL:
+        return None, ""
+    png_bytes, label = anm_radar_image()
+    if not png_bytes:
+        return None, ""
+    W, S, E, N = ANM_BBOX
+    base, (w, h), (nx0, ny0, dnx, dny) = _osm_base_for_bbox(W, S, E, N, ANM_MAP_W)
+    if MAP_BASE_DIM > 0:                                       # fade the base
+        base.alpha_composite(Image.new("RGBA", (w, h), (255, 255, 255, int(255 * min(1.0, MAP_BASE_DIM)))))
+    try:
+        radar = Image.open(BytesIO(png_bytes)).convert("RGBA").resize((w, h), Image.BILINEAR)
+    except Exception:
+        return None, ""
+    base.alpha_composite(radar)                               # respects the radar's own alpha
+    if mlat is not None and mlon is not None:
+        px = ((mlon + 180.0) / 360.0 - nx0) / dnx * w
+        py = (_merc_y(mlat) - ny0) / dny * h
+        if 0 <= px <= w and 0 <= py <= h:
+            d = ImageDraw.Draw(base)
+            mx, my = int(px), int(py)
+            d.ellipse([mx - 7, my - 7, mx + 7, my + 7], outline=(255, 0, 0, 255), width=3)
+            d.ellipse([mx - 2, my - 2, mx + 2, my + 2], fill=(255, 0, 0, 255))
+    out = BytesIO()
+    base.convert("RGB").save(out, format="PNG")
+    return out.getvalue(), label
+
 def already_sent(chat_id, key):
     return key in load_state().get(str(chat_id), {}).get("alerts_sent", {})
 
@@ -1513,7 +1611,7 @@ HELP = {
         "<code>soil Orsova</code> \u2014 soil moisture + temperature now\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 past weather for a period\n\n"
         "<b>Maps</b>\n"
-        "<code>radar Orsova</code> \u2014 radar over a faded map\n"
+        "<code>radar</code> \u2014 national radar (ANM) over a faded map\n"
         "<code>sat Orsova</code> \u2014 cloud cover\n"
         "<code>map Orsova</code> \u2014 clouds + radar\n\n"
         "<b>Model</b>\n"
@@ -1553,7 +1651,7 @@ HELP = {
         "<code>soil Orsova</code> \u2014 umiditatea solului + temperatura acum\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 vremea din trecut pe o perioada\n\n"
         "<b>Harti</b>\n"
-        "<code>radar Orsova</code> \u2014 radar peste harta estompata\n"
+        "<code>radar</code> \u2014 radar national (ANM) peste harta estompata\n"
         "<code>sat Orsova</code> \u2014 acoperire cu nori\n"
         "<code>map Orsova</code> \u2014 nori + radar\n\n"
         "<b>Model</b>\n"
@@ -1638,9 +1736,26 @@ def _map_cmd(args, chat_id, layers, label_key, base_dim=0.0, src_key="map_src"):
     return Photo(png, cap)
 
 def cmd_radar(args, chat_id):
-    # Radar over a faded OSM base so borders/coastlines show; radar stays prominent.
-    return _map_cmd(args, chat_id, ["radar"], "cap_radar",
-                    base_dim=MAP_BASE_DIM, src_key="map_src_radar")
+    # ANM national radar (in-country radars) stretched over a faded OSM base so
+    # borders show. Optional location just drops a marker on the national view.
+    lang = get_lang(chat_id)
+    if not _PIL:
+        return tr("map_nopil", lang)
+    mlat = mlon = None
+    if args:
+        loc, err = find_location(" ".join(args), chat_id, lang)
+        if err:
+            return err
+        mlat, mlon = loc["lat"], loc["lon"]
+    try:
+        png, tlabel = build_anm_radar_map(mlat, mlon)
+    except Exception as e:
+        return tr("err_generic", lang, e=e)
+    if not png:
+        return tr("map_nodata", lang)
+    cap = f"\U0001f4e1 <b>{tr('cap_radar', lang)}</b>"
+    cap += "\n" + (f"{tlabel} UTC · " if tlabel else "") + tr("map_src_anm", lang)
+    return Photo(png, cap)
 
 def cmd_sat(args, chat_id):
     # Cloud cover from Open-Meteo (RainViewer's free tier has no satellite).
