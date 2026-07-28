@@ -442,7 +442,7 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `lang ro` / `lang en` | Switch language (auto-detected from the phone on Telegram) |
 | `anm nowcasting,general` / `anm off` | Official ANM warnings by exact point (nowcasting and/or county-level) |
 
-Alerts for saved locations are sent **automatically** (checked every 30 min).
+Alerts for saved locations are sent **automatically** (checked every 15 min).
 Identical ANM warnings are de-duplicated by content, so the same bulletin is not
 resent on every cycle.
 
@@ -506,7 +506,7 @@ warning text and color come straight from ANM.
 | `TG_BOT_TOKEN` | meteo_bot | — | Telegram token (@BotFather) |
 | `TG_ALLOWED_USERS` | meteo_bot | empty | Allowed Telegram IDs (empty = anyone) |
 | `TG_BOT_STATE` | both Python | `bot_state.json` | State file |
-| `TG_ALERT_INTERVAL` | both Python | `1800` | Alert check interval (seconds) |
+| `TG_ALERT_INTERVAL` | both Python | `900` | Alert check interval (seconds; 900 = 15 min) |
 | `TG_ANM` | both Python | `1` | ANM official warnings on/off globally (`0` = off) |
 | `TG_ANM_FEEDS` | both Python | `nowcasting,general` | Default ANM feeds for new chats (per-chat override via `anm`) |
 | `TG_MAP_ZOOM` | meteo_bot | `6` | RainViewer map zoom (3..7) |

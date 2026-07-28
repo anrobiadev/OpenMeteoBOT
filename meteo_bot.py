@@ -102,7 +102,7 @@ DAILY_MAX = 16  # Open-Meteo daily forecast horizon
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 # --- Alert configuration (edit thresholds here) ---
-CHECK_INTERVAL_SEC = int(os.environ.get("TG_ALERT_INTERVAL", "900"))  # 30 min
+CHECK_INTERVAL_SEC = int(os.environ.get("TG_ALERT_INTERVAL", "900"))  # 15 min (seconds)
 ALERT_WINDOW_H = 12          # how many hours ahead to scan
 GUST_KMH = 60                # strong wind gusts
 RAIN_MM_H = 4.0              # heavy rain per hour
@@ -1863,7 +1863,8 @@ HELP = {
         "<code>radar</code> \u2014 national radar (ANM) over a faded map\n"
         "<code>sat Orsova</code> \u2014 cloud cover\n"
         "<code>map Orsova</code> \u2014 clouds + radar\n"
-        "<code>mapset</code> \u2014 map settings (radar source, dim, cloud colour/opacity, zoom)\n\n"
+        "<code>mapset</code> \u2014 map settings (radar source, dim, cloud colour/opacity, zoom, bbox)\n"
+        "<code>mapset tz Europe/Bucharest</code> \u2014 local time on maps (or <code>+3</code> / <code>auto</code>)\n\n"
         "<b>Model</b>\n"
         "<code>model</code> \u2014 show the current model and the list of models\n"
         "<code>model iconeu</code> \u2014 set the default model (name from the list)\n\n"
@@ -1907,7 +1908,8 @@ HELP = {
         "<code>radar</code> \u2014 radar national (ANM) peste harta estompata\n"
         "<code>sat Orsova</code> \u2014 acoperire cu nori\n"
         "<code>map Orsova</code> \u2014 nori + radar\n"
-        "<code>mapset</code> \u2014 setari harta (sursa radar, estompare, culoare/opacitate nori, zoom)\n\n"
+        "<code>mapset</code> \u2014 setari harta (sursa radar, estompare, culoare/opacitate nori, zoom, bbox)\n"
+        "<code>mapset tz Europe/Bucharest</code> \u2014 ora locala pe harti (sau <code>+3</code> / <code>auto</code>)\n\n"
         "<b>Model</b>\n"
         "<code>model</code> \u2014 arata modelul curent si lista de modele\n"
         "<code>model iconeu</code> \u2014 seteaza modelul implicit (nume din lista)\n\n"
