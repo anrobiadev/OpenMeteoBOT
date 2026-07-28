@@ -1085,6 +1085,10 @@ def build_map(lat, lon, layers, z=None, w=None, h=None):
     canvas = Image.new("RGBA", (w, h), (30, 30, 30, 255))
 
     def paste_layer(getter, composite):
+        # alpha_composite() rejects negative destinations, and edge tiles start
+        # off-canvas (negative px/py). So build the overlay on its own layer with
+        # paste() (which allows negatives), then composite the whole layer at (0,0).
+        layer_img = Image.new("RGBA", (w, h), (0, 0, 0, 0)) if composite else None
         for tx in range(x0, x1 + 1):
             for ty in range(y0, y1 + 1):
                 if ty < 0 or ty >= n:
@@ -1095,9 +1099,11 @@ def build_map(lat, lon, layers, z=None, w=None, h=None):
                 px = int(round(tx * TILE - left))
                 py = int(round(ty * TILE - top))
                 if composite:
-                    canvas.alpha_composite(img, (px, py))
+                    layer_img.paste(img, (px, py), img)   # negatives OK; use alpha as mask
                 else:
                     canvas.paste(img, (px, py))
+        if composite:
+            canvas.alpha_composite(layer_img)             # dest (0,0) -> valid
 
     paste_layer(lambda x, y: _fetch_img(OSM_TILE.format(z=z, x=x, y=y)), False)
     tlabel = ""
