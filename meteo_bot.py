@@ -73,6 +73,7 @@ import json
 import re
 import math
 import hashlib
+import html
 import unicodedata
 import threading
 import requests
@@ -642,6 +643,24 @@ def forecast(lat, lon, model_id, units):
     r.raise_for_status()
     return r.json()
 
+def fetch_alert_forecast(lat, lon, model_id):
+    """Raw hourly data for alert evaluation, in metric units so the values
+    match the thresholds (gust km/h, rain mm, snow cm, temp degC). Returns the
+    Open-Meteo JSON consumed by evaluate_alerts()."""
+    params = {
+        "latitude": lat, "longitude": lon,
+        "hourly": "temperature_2m,precipitation,snowfall,wind_gusts_10m",
+        "forecast_days": 2, "timezone": "auto",
+        "wind_speed_unit": "kmh",
+        "precipitation_unit": "mm",
+        "temperature_unit": "celsius",
+    }
+    if model_id and model_id != "best_match":
+        params["models"] = model_id
+    r = requests.get(FC_URL, params=params, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
 def format_24h(city, data, model_label, units, lang="en"):
     h = data.get("hourly", {})
     times = h.get("time", [])
@@ -878,6 +897,7 @@ def point_in_rings(x, y, rings):
 
 def anm_clean(s):
     s = re.sub(r"<[^>]+>", " ", s or "")
+    s = html.unescape(s)                 # &ndash;->–, &acirc;->â, &icirc;->î, &nbsp;->space
     return re.sub(r"\s+", " ", s).strip()
 
 def anm_walk(node, ctx, out):
@@ -940,17 +960,20 @@ def anm_get_areas():
 def format_anm_alert(loc, area, lang):
     emoji, ro_name, en_name = ANM_COLORS.get(area["culoare"], ("\u26a0\ufe0f", "", ""))
     cname = ro_name if lang == "ro" else en_name
-    lines = [f"{emoji} <b>{tr('anm_hdr', lang)} \u2014 {loc_label(loc)}</b>",
-             tr("anm_code", lang, color=cname)]
+    # ANM text is user-facing free text; escape &, <, > so Telegram's HTML
+    # parser accepts the message (otherwise it rejects it and nothing arrives).
+    lines = [f"{emoji} <b>{tr('anm_hdr', lang)} \u2014 {html.escape(loc_label(loc))}</b>",
+             tr("anm_code", lang, color=html.escape(cname))]
     fen = area.get("fenomen", "")
     if fen and "conform" not in fen.lower():
-        lines.append(fen)
+        lines.append(html.escape(html.unescape(fen.strip())))
     valid = area.get("interval") or area.get("expira")
     if valid and "conform" not in valid.lower():
-        lines.append(tr("anm_valid", lang, v=valid))
+        lines.append(tr("anm_valid", lang, v=html.escape(html.unescape(valid.strip()))))
     body = anm_clean(area.get("mesaj", ""))
     if body:
-        lines.append(body[:400].strip())
+        # send() splits long messages, so deliver the full warning (no cut).
+        lines.append(html.escape(body.strip()))
     lines.append(tr("anm_src", lang))
     return "\n".join(lines)
 
@@ -1629,14 +1652,45 @@ def handle_text(text, chat_id, lang_hint=None):
         return tr("err_generic", lang, e=e)
 
 # --- Telegram ---
-def send(chat_id, text):
+TG_LIMIT = 4096   # Telegram hard limit per message (chars)
+
+def _split_message(text, limit=TG_LIMIT):
+    """Split long text into <=limit chunks, preferring line boundaries so we
+    don't cut inside an HTML tag."""
+    if len(text) <= limit:
+        return [text]
+    chunks, cur = [], ""
+    for line in text.split("\n"):
+        while len(line) > limit:        # a single line longer than the limit
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        add = line if not cur else "\n" + line
+        if len(cur) + len(add) > limit:
+            chunks.append(cur)
+            cur = line
+        else:
+            cur += add
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+def _post_message(chat_id, text):
     try:
-        requests.post(f"{TG_API}/sendMessage", json={
+        r = requests.post(f"{TG_API}/sendMessage", json={
             "chat_id": chat_id, "text": text,
             "parse_mode": "HTML", "disable_web_page_preview": True,
         }, timeout=15)
+        if not r.ok:
+            print(f"Telegram rejected message (chat {chat_id}): {r.status_code} {r.text}")
     except requests.RequestException as e:
         print("Send error:", e)
+
+def send(chat_id, text):
+    for chunk in _split_message(text):
+        _post_message(chat_id, chunk)
 
 def send_photo(chat_id, data, caption=""):
     try:
