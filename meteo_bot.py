@@ -88,6 +88,9 @@ from datetime import datetime, timezone, timedelta
 # --- Config ---
 BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 STATE_FILE = os.environ.get("TG_BOT_STATE", "bot_state.json")
+# Shared across Telegram & WhatsApp (they have separate state files but the same
+# working dir), so global settings like the alert interval apply to both.
+CONFIG_FILE = os.environ.get("TG_CONFIG_FILE", "meteobot_config.json")
 ALLOWED_USERS = {
     s.strip() for s in os.environ.get("TG_ALLOWED_USERS", "").split(",") if s.strip()
 }
@@ -247,15 +250,30 @@ def reset_map_cfg(chat_id):
         state.setdefault(str(chat_id), {}).pop("map", None)
     update_state(m)
 
-# --- Global alert-check interval (seconds), stored under a reserved state key ---
+# --- Shared config file (Telegram + WhatsApp) for truly-global settings ----------
+def load_config():
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_config(cfg):
+    tmp = CONFIG_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg, f)
+    os.replace(tmp, CONFIG_FILE)   # atomic; last writer wins across processes
+
+# --- Global alert-check interval (seconds), shared by both platforms ---
 def get_alert_interval():
-    v = load_state().get("_config", {}).get("alert_interval")
+    v = load_config().get("alert_interval")
     return int(v) if isinstance(v, int) and v >= 60 else CHECK_INTERVAL_SEC
 
 def set_alert_interval(seconds):
-    def m(state):
-        state.setdefault("_config", {})["alert_interval"] = int(seconds)
-    update_state(m)
+    with _lock:
+        cfg = load_config()
+        cfg["alert_interval"] = int(seconds)
+        save_config(cfg)
 
 def fmt_pressure(hpa, unit):
     if hpa is None:

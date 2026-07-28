@@ -3,6 +3,7 @@ meteobot.env
 *.env
 bot_state.json
 wa_state.json
+meteobot_config.json
 *.tmp
 
 # --- WhatsApp session (Baileys) ---
