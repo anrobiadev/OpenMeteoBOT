@@ -2,8 +2,15 @@
 
 A personal weather bot powered by **Open-Meteo** (free, no API key), running on a
 Raspberry Pi / Linux. It provides hourly and multi-day forecasts, soil moisture,
-historical data, and **automatic alerts** (wind, rain, snow, heat, frost) for saved
-locations. Works on **Telegram** and, optionally, on **WhatsApp**.
+air quality, river-discharge (flood) forecasts, historical data, **radar & cloud
+maps**, and **automatic alerts** (wind, rain, snow, heat, frost) for saved locations.
+It also relays **official ANM warnings** (meteoromania.ro) for your exact point,
+can send a **daily forecast at a set time**, and shows the **national radar image**
+from ANM. Works on **Telegram** and, optionally, on **WhatsApp**.
+
+Extra data sources it uses (all free, no key): Open-Meteo Air Quality (CAMS),
+Open-Meteo Flood (GloFAS), RainViewer (radar tiles), OpenStreetMap (base map),
+and meteoromania.ro (ANM warnings + national radar image).
 
 ---
 
@@ -57,8 +64,9 @@ chmod +x install.sh
 What it does, step by step:
 
 1. Asks what you want: **Telegram**, **WhatsApp**, or **both**.
-2. Installs the required dependencies (Python: `requests`/`flask`; for WhatsApp it
-   checks/installs **Node 20+** and the Baileys packages via `npm install`).
+2. Installs the required dependencies (Python: `requests`/`pillow`, plus `flask`
+   for WhatsApp; for WhatsApp it also checks/installs **Node 20+** and the Baileys
+   packages via `npm install`).
 3. **Telegram:** asks for your token (@BotFather) and saves it to `meteobot.env`
    (optionally also the list of allowed IDs).
 4. **WhatsApp:** shows the **QR code** to scan and waits for the connection
@@ -102,10 +110,16 @@ sudo chown -R $USER:$USER ~/OpenMeteoBot
 ### Python
 
 ```bash
-pip install requests flask --break-system-packages
+pip install requests flask pillow --break-system-packages
 ```
 
 (`--break-system-packages` is required on recent Raspberry Pi OS / Debian.)
+
+- **`pillow`** is needed for the map commands (`radar`, `sat`, `map`). Without it
+  those commands reply that Pillow is missing; everything else still works.
+- For local time on maps with **named** time zones (e.g. `Europe/Bucharest`), make
+  sure `tzdata` is present: `sudo apt install -y tzdata`. A numeric offset
+  (`mapset tz +3`) works without it.
 
 ### Node.js 20+ (only if you use WhatsApp)
 
@@ -410,7 +424,14 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `3` | 3-day forecast for all saved locations |
 | `clad` | Partial name matches a saved location (Cladova) |
 | `soil Orsova` | Soil moisture + temperature, now |
+| `air Orsova` | Air quality — European AQI + PM2.5/PM10/O₃/NO₂/SO₂/CO + UV |
+| `flood Orsova [days]` | River-discharge (flood) forecast, GloFAS |
 | `hist Orsova 2025-07-01 2025-07-10` | Past weather for a period |
+| `radar` | National radar image from ANM, over a faded map |
+| `sat Orsova` | Cloud cover (Open-Meteo) over a faded map |
+| `map Orsova` | Clouds + radar combined |
+| `mapset` | Map settings (radar source, dim, cloud colour/opacity, zoom, time zone, ANM bbox) |
+| `alarm 1 21:05` / `alarm off` | Daily 24h forecast for a saved slot at a set time |
 | `model` / `model iconeu` | Show / set the weather model |
 | `save 1 Orsova` | Save a location in slot 1 |
 | `locs` | List saved locations |
@@ -422,6 +443,37 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `anm nowcasting,general` / `anm off` | Official ANM warnings by exact point (nowcasting and/or county-level) |
 
 Alerts for saved locations are sent **automatically** (checked every 30 min).
+Identical ANM warnings are de-duplicated by content, so the same bulletin is not
+resent on every cycle.
+
+### Maps (`radar` / `sat` / `map`) and `mapset`
+
+- **`radar`** shows the **national radar image published by ANM** (in-country
+  radars) stretched onto a faded OpenStreetMap base so borders line up. Add a
+  location (`radar Orsova`) to drop a marker. Needs Pillow.
+- **`sat Orsova`** shows **cloud cover** from Open-Meteo (grey = cloudier). The
+  free RainViewer tier has no satellite, so cloud cover is used instead.
+- **`map Orsova`** overlays clouds + radar on one image.
+- **`mapset`** (alias `hartaset`) tunes the maps per chat and persists it:
+
+  | Setting | Example | Meaning |
+  |---|---|---|
+  | radar source | `mapset radar anm` / `mapset radar rainviewer` | ANM national image, or RainViewer tiles |
+  | base fade | `mapset dim 0.55` | 0 = full-colour map, 1 = white-out |
+  | cloud colour | `mapset cloud 105,105,105` | RGB of the cloud shading |
+  | cloud opacity | `mapset alpha 225` | 0..255 at 100% overcast |
+  | zoom | `mapset zoom 6` | RainViewer map zoom (3..7) |
+  | **time zone** | `mapset tz Europe/Bucharest` / `mapset tz +3` / `mapset tz auto` | Local time on map captions (default: server time) |
+  | ANM bbox | `mapset bbox 17.9727,42.0465,31.4767,49.1441` | Geo bounds of the ANM radar image (W,S,E,N) |
+  | reset | `mapset reset` | Back to defaults |
+
+### Daily forecast alarm (`alarm`)
+
+Send the 24h forecast for a saved location automatically at a fixed time:
+
+- `alarm 1 21:05` — slot 1, every day at 21:05 (server local time)
+- `alarm 2 08:00` — a second alarm; one per saved slot
+- `alarm 1 off` — clear slot 1; `alarm off` — clear all; `alarm` — list
 
 **ANM official warnings.** Each saved location is also checked against Romania's
 official ANM warnings (meteoromania.ro) using **point-in-polygon** on the exact
@@ -457,6 +509,16 @@ warning text and color come straight from ANM.
 | `TG_ALERT_INTERVAL` | both Python | `1800` | Alert check interval (seconds) |
 | `TG_ANM` | both Python | `1` | ANM official warnings on/off globally (`0` = off) |
 | `TG_ANM_FEEDS` | both Python | `nowcasting,general` | Default ANM feeds for new chats (per-chat override via `anm`) |
+| `TG_MAP_ZOOM` | meteo_bot | `6` | RainViewer map zoom (3..7) |
+| `TG_MAP_W` / `TG_MAP_H` | meteo_bot | `720` | RainViewer map size (px) |
+| `TG_MAP_BASE_DIM` | meteo_bot | `0.55` | Default base-map fade (0..1) |
+| `TG_CLOUD_RGB` | meteo_bot | `105,105,105` | Cloud shading colour |
+| `TG_CLOUD_ALPHA` | meteo_bot | `225` | Cloud opacity at 100% overcast (0..255) |
+| `TG_CLOUD_COLS` / `TG_CLOUD_ROWS` | meteo_bot | `14` / `12` | Cloud sampling grid |
+| `TG_ANM_BBOX` | meteo_bot | `17.9727,42.0465,31.4767,49.1441` | Geo bounds (W,S,E,N) of the ANM radar image |
+| `TG_ANM_MAP_W` | meteo_bot | `1000` | ANM radar output width (px) |
+| `TG_ANM_RADAR_URL` | meteo_bot | meteoromania.ro URL | ANM radar image URL template |
+| `TG_ANM_RADAR_OFFSET` / `TG_ANM_RADAR_LOOKBACK` | meteo_bot | `1` / `9` | ANM radar timestamp probing (minute offset / slots back) |
 | `PY_PORT` | wa_server | `5000` | Python service port |
 | `WA_SEND_URL` | wa_server | `http://127.0.0.1:3000/send` | Where alerts are sent (Node bridge) |
 | `WA_PORT` | wa_bridge | `3000` | Node bridge port |

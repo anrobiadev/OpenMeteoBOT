@@ -73,8 +73,8 @@ c_ok "All files present."
 c_info "Installing Python dependencies"
 have python3 || die "python3 is not installed."
 have pip3 || python3 -m pip --version >/dev/null 2>&1 || apt_install python3-pip
-PYDEPS="requests"
-[ "$WA" = 1 ] && PYDEPS="requests flask"
+PYDEPS="requests pillow"                 # pillow: radar/sat/map image commands
+[ "$WA" = 1 ] && PYDEPS="requests pillow flask"
 python3 -m pip install --break-system-packages $PYDEPS
 c_ok "Python: $PYDEPS installed."
 
