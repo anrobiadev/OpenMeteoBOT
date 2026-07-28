@@ -25,6 +25,7 @@ import os
 import re
 import html
 import time
+import base64
 import threading
 import requests
 from flask import Flask, request, jsonify
@@ -59,6 +60,9 @@ def incoming():
         reply = core.handle_text(text, sender)
     except Exception as e:
         reply = f"Error: {e}"
+    if isinstance(reply, core.Photo):          # map/radar/sat -> send an image
+        return jsonify({"image": base64.b64encode(reply.data).decode(),
+                        "caption": to_whatsapp(reply.caption)})
     return jsonify({"reply": to_whatsapp(reply) if reply else ""})
 
 
@@ -111,8 +115,20 @@ def alert_loop():
         time.sleep(core.CHECK_INTERVAL_SEC)
 
 
+def alarm_loop():
+    """Fire due daily forecast alarms over WhatsApp (checks ~twice a minute)."""
+    while True:
+        try:
+            for chat_id, msg in core.collect_due_alarms():
+                wa_send(chat_id, to_whatsapp(msg))
+        except Exception as e:
+            print("Alarm loop error:", e)
+        time.sleep(30)
+
+
 def main():
     threading.Thread(target=alert_loop, daemon=True).start()
+    threading.Thread(target=alarm_loop, daemon=True).start()
     print(f"WhatsApp Python service on :{PY_PORT}, alerts every {core.CHECK_INTERVAL_SEC}s")
     app.run(host="127.0.0.1", port=PY_PORT)
 

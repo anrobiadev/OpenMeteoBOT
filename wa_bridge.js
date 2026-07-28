@@ -78,10 +78,17 @@ async function start() {
       if (!allowed) continue;
       if (!text.trim()) continue;
       try {
-        const res = await axios.post(PY_URL, { from: jid, text }, { timeout: 25000 });
-        const reply = res.data && res.data.reply;
-        console.log(`[out] replyLen=${reply ? reply.length : 0}`);
-        if (reply) await sock.sendMessage(jid, { text: reply });
+        // Map/radar/sat build an image on the Python side, which can be slow.
+        const res = await axios.post(PY_URL, { from: jid, text }, { timeout: 60000 });
+        const data = res.data || {};
+        if (data.image) {                        // Photo reply (map/radar/sat)
+          const buf = Buffer.from(data.image, 'base64');
+          console.log(`[out] image bytes=${buf.length}`);
+          await sock.sendMessage(jid, { image: buf, caption: data.caption || '' });
+        } else if (data.reply) {                 // text reply
+          console.log(`[out] replyLen=${data.reply.length}`);
+          await sock.sendMessage(jid, { text: data.reply });
+        }
       } catch (e) {
         console.error('Python error:', e.message);
       }

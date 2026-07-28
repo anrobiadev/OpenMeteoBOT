@@ -514,6 +514,18 @@ T = {
     "mapset_zoom_usage": {"en": "Use: <code>mapset zoom 6</code> (3..7)", "ro": "Foloseste: <code>mapset zoom 6</code> (3..7)"},
     "mapset_bbox_usage": {"en": "Use: <code>mapset bbox W,S,E,N</code> e.g. <code>mapset bbox 20.1,42.2,29.8,49.6</code> (W&lt;E, S&lt;N)",
                           "ro": "Foloseste: <code>mapset bbox V,S,E,N</code> ex. <code>mapset bbox 20.1,42.2,29.8,49.6</code> (V&lt;E, S&lt;N)"},
+    "alarm_none": {"en": "No alarms set. Add one: <code>alarm 1 21:05</code> (saved slot 1 at 21:05).",
+                   "ro": "Nicio alarma setata. Adauga: <code>alarm 1 21:05</code> (slotul 1 salvat, la 21:05)."},
+    "alarm_list_hdr": {"en": "⏰ <b>Daily forecast alarms</b> (server time):", "ro": "⏰ <b>Alarme prognoza zilnica</b> (ora serverului):"},
+    "alarm_set": {"en": "⏰ Alarm set: <b>{name}</b> (slot {slot}) daily at <b>{t}</b>.",
+                  "ro": "⏰ Alarma setata: <b>{name}</b> (slot {slot}) zilnic la <b>{t}</b>."},
+    "alarm_off_all": {"en": "All alarms turned off.", "ro": "Toate alarmele au fost oprite."},
+    "alarm_off_slot": {"en": "Alarm for slot {slot} turned off.", "ro": "Alarma pentru slotul {slot} a fost oprita."},
+    "alarm_no_slot": {"en": "No saved location in slot {slot}. Save one first: <code>save {slot} Orsova</code>.",
+                      "ro": "Nicio locatie salvata in slotul {slot}. Salveaza intai: <code>save {slot} Orsova</code>."},
+    "alarm_usage": {"en": "Use: <code>alarm 1 21:05</code> | <code>alarm 1 off</code> | <code>alarm off</code>",
+                    "ro": "Foloseste: <code>alarm 1 21:05</code> | <code>alarm 1 off</code> | <code>alarm off</code>"},
+    "alarm_bad_time": {"en": "Time must be HH:MM (24h), e.g. <code>21:05</code>.", "ro": "Ora trebuie HH:MM (24h), ex. <code>21:05</code>."},
     "anm_off_word": {"en": "off", "ro": "oprit"},
     "anm_current": {
         "en": "ANM warnings: <b>{feeds}</b>\nSet with: <code>anm nowcasting,general</code> | <code>anm nowcasting</code> | <code>anm off</code>",
@@ -1058,9 +1070,13 @@ def anm_alerts_for(chat_id, slot, loc, areas, lang):
     for area in areas:
         if not point_in_rings(x, y, area["rings"]):
             continue
+        # Dedup on the actual warning CONTENT (colour + phenomenon + message body),
+        # not on volatile fields, and with no date in the key -> the same bulletin
+        # is never resent (fixes identical messages arriving repeatedly).
+        body = anm_clean(area.get("mesaj", ""))
         sig = hashlib.md5(
-            f"{area['culoare']}|{area['expira']}|{area['fenomen']}".encode()).hexdigest()[:8]
-        key = f"anm:{slot}:{sig}:{today}"
+            f"{area.get('culoare','')}|{area.get('fenomen','')}|{body}".encode()).hexdigest()[:12]
+        key = f"anm:{slot}:{sig}"
         if already_sent(chat_id, key):
             continue
         mark_sent(chat_id, key, today)
@@ -1265,8 +1281,10 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
 # lat/lon bounds. We replicate that: build an OSM base for the SAME Web-Mercator
 # rectangle and stretch the radar onto it, so borders line up with ANM's own view.
 # BBOX order: West,South,East,North (lon/lat). Tune with TG_ANM_BBOX if borders drift.
+# Exact bounds from ANM's Leaflet imageOverlay (Web Mercator EPSG:3857, converted
+# to lon/lat): X 2000709.43..3503967.83 m, Y 5162129.78..6302543.86 m.
 ANM_BBOX = tuple(float(x) for x in
-                 os.environ.get("TG_ANM_BBOX", "20.22,43.61,29.62,48.26").split(","))[:4]
+                 os.environ.get("TG_ANM_BBOX", "17.9727,42.0465,31.4767,49.1441").split(","))[:4]
 ANM_MAP_W = int(os.environ.get("TG_ANM_MAP_W", "1000"))        # output width in px
 ANM_RADAR_URL = os.environ.get(
     "TG_ANM_RADAR_URL",
@@ -1362,13 +1380,21 @@ def already_sent(chat_id, key):
     return key in load_state().get(str(chat_id), {}).get("alerts_sent", {})
 
 def mark_sent(chat_id, key, today):
+    """Record that `key` was sent. Stores the date so marks can survive past
+    midnight (ANM dedup) and get pruned by age instead of by an exact-day suffix."""
     def m(state):
         c = state.setdefault(str(chat_id), {})
         sent = c.setdefault("alerts_sent", {})
-        for k in list(sent.keys()):     # prune marks from previous days
-            if not k.endswith(today):
+        try:
+            cutoff = (datetime.strptime(today, "%Y-%m-%d") - timedelta(days=2)).strftime("%Y-%m-%d")
+        except ValueError:
+            cutoff = ""
+        for k in list(sent.keys()):          # prune marks older than ~2 days
+            v = sent[k]
+            d = v if isinstance(v, str) else ""   # legacy True -> prune
+            if not d or d < cutoff:
                 del sent[k]
-        sent[key] = True
+        sent[key] = today
     update_state(m)
 
 # --- Commands ---
@@ -1696,7 +1722,8 @@ HELP = {
         "<code>set</code> \u2014 show current alert thresholds\n"
         "<code>set gust 70</code> \u2014 change a threshold "
         "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n"
-        "<code>anm</code> \u2014 official ANM warnings: <code>anm nowcasting,general</code> / <code>anm off</code>\n\n"
+        "<code>anm</code> \u2014 official ANM warnings: <code>anm nowcasting,general</code> / <code>anm off</code>\n"
+        "<code>alarm 1 21:05</code> \u2014 daily 24h forecast for slot 1 at 21:05 (<code>alarm off</code>)\n\n"
         "<b>Units &amp; language</b>\n"
         "<code>units</code> \u2014 show current display units\n"
         "<code>units temp F</code> \u2014 set units (temp C/F, wind kmh/ms/mph/kn, "
@@ -1737,7 +1764,8 @@ HELP = {
         "<code>set</code> \u2014 arata pragurile de alerta curente\n"
         "<code>set gust 70</code> \u2014 schimba un prag "
         "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n"
-        "<code>anm</code> \u2014 avertizari oficiale ANM: <code>anm nowcasting,general</code> / <code>anm off</code>\n\n"
+        "<code>anm</code> \u2014 avertizari oficiale ANM: <code>anm nowcasting,general</code> / <code>anm off</code>\n"
+        "<code>alarm 1 21:05</code> \u2014 prognoza zilnica 24h pentru slotul 1 la 21:05 (<code>alarm off</code>)\n\n"
         "<b>Unitati &amp; limba</b>\n"
         "<code>units</code> \u2014 arata unitatile de afisare curente\n"
         "<code>units temp F</code> \u2014 seteaza unitatile (temp C/F, wind kmh/ms/mph/kn, "
@@ -1910,12 +1938,116 @@ def cmd_mapset(args, chat_id):
         return tr("mapset_reset", lang)
     return tr("mapset_unknown", lang, k=key)
 
+# --- Daily forecast alarm (per saved location + time HH:MM, server local time) ----
+_TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
+
+def _parse_hhmm(s):
+    mt = _TIME_RE.match(s.strip())
+    if not mt:
+        return None
+    h, mi = int(mt.group(1)), int(mt.group(2))
+    if 0 <= h <= 23 and 0 <= mi <= 59:
+        return f"{h:02d}:{mi:02d}"
+    return None
+
+def cmd_alarm(args, chat_id):
+    """Set/list/clear daily 24h-forecast alarms. Fires at server local time.
+    Examples: 'alarm 1 21:05' (slot 1 at 21:05), 'alarm 1 off', 'alarm off'."""
+    lang = get_lang(chat_id)
+    cdata = load_state().get(str(chat_id), {})
+    alarms = dict(cdata.get("alarms", {}))
+    locs = cdata.get("locations", {})
+    if not args:
+        if not alarms:
+            return tr("alarm_none", lang)
+        lines = [tr("alarm_list_hdr", lang)]
+        for slot in sorted(alarms, key=lambda s: (int(s) if s.isdigit() else 999)):
+            loc = locs.get(slot)
+            name = loc_label(loc) if loc else slot
+            lines.append(f"<code>{slot}</code> {name} — <b>{alarms[slot]}</b>")
+        return "\n".join(lines)
+    a0 = args[0].lower()
+    if a0 in ("off", "stop", "oprit", "none") and len(args) == 1:
+        def m(state):
+            state.setdefault(str(chat_id), {}).pop("alarms", None)
+            state.setdefault(str(chat_id), {}).pop("alarms_fired", None)
+        update_state(m)
+        return tr("alarm_off_all", lang)
+    slot = args[0]
+    if slot not in locs:
+        return tr("alarm_no_slot", lang, slot=slot)
+    if len(args) >= 2 and args[1].lower() in ("off", "stop", "oprit"):
+        def m(state):
+            a = state.setdefault(str(chat_id), {}).setdefault("alarms", {})
+            a.pop(slot, None)
+        update_state(m)
+        return tr("alarm_off_slot", lang, slot=slot)
+    if len(args) < 2:
+        return tr("alarm_usage", lang)
+    hhmm = _parse_hhmm(args[1])
+    if not hhmm:
+        return tr("alarm_bad_time", lang)
+    def m(state):
+        state.setdefault(str(chat_id), {}).setdefault("alarms", {})[slot] = hhmm
+    update_state(m)
+    return tr("alarm_set", lang, slot=slot, name=loc_label(locs[slot]), t=hhmm)
+
+def collect_due_alarms(now=None):
+    """Return [(chat_id, message)] for alarms due at `now` (server local time),
+    marking them fired for today so they don't repeat. Shared by both transports."""
+    now = now or datetime.now()
+    hhmm = now.strftime("%H:%M")
+    today = now.strftime("%Y-%m-%d")
+    out, to_mark = [], []
+    for chat_id, cdata in load_state().items():
+        alarms = cdata.get("alarms", {})
+        if not alarms:
+            continue
+        locs = cdata.get("locations", {})
+        fired = cdata.get("alarms_fired", {})
+        units = get_units(chat_id)
+        lang = get_lang(chat_id)
+        model_id, model_label = MODELS.get(cdata.get("model", DEFAULT_MODEL), MODELS[DEFAULT_MODEL])
+        for slot, t in alarms.items():
+            if t != hhmm or fired.get(slot) == today:
+                continue
+            loc = locs.get(slot)
+            if not loc:
+                continue
+            try:
+                data = forecast(loc["lat"], loc["lon"], model_id, units)
+                msg = format_24h(loc_label(loc), data, model_label, units, lang)
+            except requests.RequestException:
+                continue
+            out.append((chat_id, msg))
+            to_mark.append((str(chat_id), slot, today))
+    if to_mark:
+        def m(state):
+            for cid, slot, day in to_mark:
+                fired = state.setdefault(cid, {}).setdefault("alarms_fired", {})
+                for k in list(fired.keys()):     # keep only today's marks
+                    if fired[k] != day:
+                        del fired[k]
+                fired[slot] = day
+        update_state(m)
+    return out
+
+def alarm_loop():
+    """Fire due daily alarms; checks about twice a minute."""
+    while True:
+        try:
+            for chat_id, msg in collect_due_alarms():
+                send(chat_id, msg)
+        except Exception as e:
+            print("Alarm loop error:", e)
+        time.sleep(30)
+
 # --- Command router (easy to extend) ---
 COMMANDS = {
     "wx": cmd_wx, "model": cmd_model,
     "save": cmd_save, "locs": cmd_locs, "del": cmd_del, "alerts": cmd_alerts,
     "set": cmd_set, "units": cmd_units, "soil": cmd_soil, "hist": cmd_hist,
-    "lang": cmd_lang, "anm": cmd_anm,
+    "lang": cmd_lang, "anm": cmd_anm, "alarm": cmd_alarm, "alarma": cmd_alarm,
     "radar": cmd_radar, "sat": cmd_sat, "satelit": cmd_sat,
     "map": cmd_map, "harta": cmd_map, "mapset": cmd_mapset, "hartaset": cmd_mapset,
     "start": cmd_start, "help": cmd_start,
@@ -2040,6 +2172,7 @@ def main():
     if not BOT_TOKEN:
         raise SystemExit("Set the TG_BOT_TOKEN environment variable (token from @BotFather).")
     threading.Thread(target=alert_loop, daemon=True).start()
+    threading.Thread(target=alarm_loop, daemon=True).start()
     print(f"Bot started. Alert check every {CHECK_INTERVAL_SEC}s. Waiting for messages...")
     offset = None
     while True:
