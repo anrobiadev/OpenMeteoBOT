@@ -96,6 +96,8 @@ TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FC_URL = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"  # ERA5 history
+AQI_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"  # air quality
+FLOOD_URL = "https://flood-api.open-meteo.com/v1/flood"            # GloFAS river discharge
 DAILY_MAX = 16  # Open-Meteo daily forecast horizon
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -231,6 +233,7 @@ def get_map_cfg(chat_id):
         "cloud_rgb": list(CLOUD_RGB),   # [r, g, b] of the cloud shading
         "zoom": MAP_ZOOM,               # RainViewer map zoom (3..7)
         "anm_bbox": list(ANM_BBOX),     # [W, S, E, N] geo bounds of the ANM radar image
+        "tz": "",                       # map time zone: '' = server local, offset (+3) or IANA
     }
     cfg.update(load_state().get(str(chat_id), {}).get("map", {}))
     return cfg
@@ -433,6 +436,35 @@ T = {
     "soil_temp0": {"en": "\U0001f321 soil temp 0cm: {v}", "ro": "\U0001f321 temp sol 0cm: {v}"},
     "soil_airhum": {"en": "\U0001f4a7 air humidity: {v}", "ro": "\U0001f4a7 umiditate aer: {v}"},
     "soil_moist_h": {"en": "soil moisture (vol. water):", "ro": "umiditate sol (apa vol.):"},
+    # air quality
+    "air_usage": {"en": "Usage: <code>air Orsova</code> (city, coordinates, or a saved slot)",
+                  "ro": "Utilizare: <code>air Orsova</code> (oras, coordonate sau un slot salvat)"},
+    "air_title": {"en": "air quality", "ro": "calitatea aerului"},
+    "air_nodata": {"en": "No air-quality data for this point.", "ro": "Fara date de calitate a aerului pentru acest punct."},
+    "air_time_src": {"en": "time: {t} · source: Open-Meteo (CAMS)", "ro": "ora: {t} · sursa: Open-Meteo (CAMS)"},
+    "air_pm25": {"en": "PM2.5: {v}", "ro": "PM2.5: {v}"},
+    "air_pm10": {"en": "PM10: {v}", "ro": "PM10: {v}"},
+    "air_o3": {"en": "Ozone (O₃): {v}", "ro": "Ozon (O₃): {v}"},
+    "air_no2": {"en": "NO₂: {v}", "ro": "NO₂: {v}"},
+    "air_so2": {"en": "SO₂: {v}", "ro": "SO₂: {v}"},
+    "air_co": {"en": "CO: {v}", "ro": "CO: {v}"},
+    "air_uv": {"en": "☀ UV index: {v}", "ro": "☀ Index UV: {v}"},
+    "aqi_unknown": {"en": "no data", "ro": "fara date"},
+    "aqi_good": {"en": "good", "ro": "bun"},
+    "aqi_fair": {"en": "fair", "ro": "acceptabil"},
+    "aqi_moderate": {"en": "moderate", "ro": "moderat"},
+    "aqi_poor": {"en": "poor", "ro": "slab"},
+    "aqi_vpoor": {"en": "very poor", "ro": "foarte slab"},
+    "aqi_epoor": {"en": "extremely poor", "ro": "extrem de slab"},
+    # flood / river discharge
+    "flood_usage": {"en": "Usage: <code>flood Orsova [days]</code> (river discharge forecast)",
+                    "ro": "Utilizare: <code>flood Orsova [zile]</code> (prognoza debit rau)"},
+    "flood_title": {"en": "river discharge", "ro": "debit rau"},
+    "flood_src": {"en": "source: Open-Meteo Flood (GloFAS)", "ro": "sursa: Open-Meteo Flood (GloFAS)"},
+    "flood_nodata": {"en": "No river-discharge data for this point (not near a modelled river).",
+                     "ro": "Fara date de debit pentru acest punct (nu e langa un rau modelat)."},
+    "flood_note": {"en": "⚠️ marks days near the period's peak. GloFAS ~5 km, not a local gauge.",
+                   "ro": "⚠️ marcheaza zilele aproape de varf. GloFAS ~5 km, nu o statie locala."},
     # hist
     "hist_usage": {
         "en": ("Usage: <code>hist Orsova 2025-07-01 2025-07-10</code>\n"
@@ -484,22 +516,24 @@ T = {
                "<code>alpha</code> cloud opacity: <b>{alpha}</b>  (0..255)\n"
                "<code>cloud</code> colour RGB: <b>{rgb}</b>\n"
                "<code>zoom</code> map zoom: <b>{zoom}</b>  (3..7)\n"
+               "<code>tz</code> map time zone: <b>{tz}</b>\n"
                "<code>bbox</code> ANM radar bounds W,S,E,N: <b>{bbox}</b>\n\n"
                "Change e.g.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
                "<code>mapset alpha 225</code> | <code>mapset cloud 105,105,105</code> | "
-               "<code>mapset zoom 6</code> | <code>mapset bbox 20.1,42.2,29.8,49.6</code> | "
-               "<code>mapset reset</code>"),
+               "<code>mapset zoom 6</code> | <code>mapset tz Europe/Bucharest</code> | "
+               "<code>mapset bbox 20.1,42.2,29.8,49.6</code> | <code>mapset reset</code>"),
         "ro": ("<b>Setari harta</b>\n"
                "<code>radar</code> sursa: <b>{src}</b>  (anm | rainviewer)\n"
                "<code>dim</code> estompare fundal: <b>{dim}</b>  (0..1)\n"
                "<code>alpha</code> opacitate nori: <b>{alpha}</b>  (0..255)\n"
                "<code>cloud</code> culoare RGB: <b>{rgb}</b>\n"
                "<code>zoom</code> zoom harta: <b>{zoom}</b>  (3..7)\n"
+               "<code>tz</code> fus orar harta: <b>{tz}</b>\n"
                "<code>bbox</code> limite radar ANM V,S,E,N: <b>{bbox}</b>\n\n"
                "Schimba ex.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
                "<code>mapset alpha 225</code> | <code>mapset cloud 105,105,105</code> | "
-               "<code>mapset zoom 6</code> | <code>mapset bbox 20.1,42.2,29.8,49.6</code> | "
-               "<code>mapset reset</code>"),
+               "<code>mapset zoom 6</code> | <code>mapset tz Europe/Bucharest</code> | "
+               "<code>mapset bbox 20.1,42.2,29.8,49.6</code> | <code>mapset reset</code>"),
     },
     "mapset_set": {"en": "Set <code>{k}</code> = <b>{v}</b>", "ro": "Setat <code>{k}</code> = <b>{v}</b>"},
     "mapset_reset": {"en": "Map settings reset to defaults.", "ro": "Setarile hartii au fost resetate."},
@@ -514,6 +548,8 @@ T = {
     "mapset_zoom_usage": {"en": "Use: <code>mapset zoom 6</code> (3..7)", "ro": "Foloseste: <code>mapset zoom 6</code> (3..7)"},
     "mapset_bbox_usage": {"en": "Use: <code>mapset bbox W,S,E,N</code> e.g. <code>mapset bbox 20.1,42.2,29.8,49.6</code> (W&lt;E, S&lt;N)",
                           "ro": "Foloseste: <code>mapset bbox V,S,E,N</code> ex. <code>mapset bbox 20.1,42.2,29.8,49.6</code> (V&lt;E, S&lt;N)"},
+    "mapset_tz_usage": {"en": "Use: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>",
+                        "ro": "Foloseste: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>"},
     "alarm_none": {"en": "No alarms set. Add one: <code>alarm 1 21:05</code> (saved slot 1 at 21:05).",
                    "ro": "Nicio alarma setata. Adauga: <code>alarm 1 21:05</code> (slotul 1 salvat, la 21:05)."},
     "alarm_list_hdr": {"en": "⏰ <b>Daily forecast alarms</b> (server time):", "ro": "⏰ <b>Alarme prognoza zilnica</b> (ora serverului):"},
@@ -1119,6 +1155,32 @@ def tilexy_to_lonlat(x, y, z):
     lat = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * y / n))))
     return lat, lon
 
+_TZ_OFFSET_RE = re.compile(r"^([+-])(\d{1,2})(?::?(\d{2}))?$")
+
+def _resolve_tz(tz):
+    """tzinfo for a setting: ''/'auto'/'server' -> None (server local); '+3'/'-2:30'
+    -> fixed offset; otherwise an IANA name (e.g. 'Europe/Bucharest')."""
+    if not tz or str(tz).lower() in ("auto", "server", "local"):
+        return None
+    mt = _TZ_OFFSET_RE.match(str(tz).strip())
+    if mt:
+        sign = 1 if mt.group(1) == "+" else -1
+        return timezone(sign * timedelta(hours=int(mt.group(2)), minutes=int(mt.group(3) or 0)))
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(str(tz).strip())
+    except Exception:
+        return None
+
+def local_time_label(dt_utc, tz):
+    """Format an aware UTC datetime as 'HH:MM TZ' in the chosen tz (server local if unset)."""
+    if dt_utc is None:
+        return ""
+    tzi = _resolve_tz(tz)
+    local = dt_utc.astimezone(tzi) if tzi is not None else dt_utc.astimezone()
+    abbr = local.strftime("%Z") or "local"
+    return f"{local.strftime('%H:%M')} {abbr}"
+
 def rainviewer_frames():
     """Cached RainViewer index -> latest radar & satellite tile paths."""
     now = time.time()
@@ -1200,14 +1262,14 @@ def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None):
         a = int(max_alpha * max(0.0, min(100.0, float(cc))) / 100.0)
         px[c, row] = rgb + (a,)                                  # grey clouds (darker = denser)
     overlay = grid.resize((w, h), Image.BICUBIC)                 # smooth field
-    return overlay, (tstamp[-5:] if len(tstamp) >= 5 else "")    # 'HH:MM'
+    return overlay, tstamp                                       # ISO time (UTC) or ''
 
 def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
-              cloud_rgb=None, cloud_alpha=None):
+              cloud_rgb=None, cloud_alpha=None, tz=None):
     """Stitch OSM base + weather overlays, centered on the point, with a marker.
     `layers` items: 'radar'/'satellite' (RainViewer tiles) or 'clouds' (Open-Meteo).
     `base_dim` (0..1) washes out the OSM base so weather stands out.
-    `cloud_rgb`/`cloud_alpha` override the cloud shading.
+    `cloud_rgb`/`cloud_alpha` override the cloud shading; `tz` localises the time.
     Returns (png_bytes, time_label) or (None, '')."""
     if not _PIL:
         return None, ""
@@ -1249,7 +1311,7 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
     paste_layer(lambda x, y: _fetch_img(OSM_TILE.format(z=z, x=x, y=y)), False)
     if base_dim > 0:                                  # fade the base map
         canvas.alpha_composite(Image.new("RGBA", (w, h), (255, 255, 255, int(255 * min(1.0, base_dim)))))
-    tlabel = ""
+    src_dt = None                                     # UTC datetime of the freshest layer
     for layer in layers:
         if layer == "clouds":
             latN, lonW = tilexy_to_lonlat(left / TILE, top / TILE, z)
@@ -1257,14 +1319,18 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
             overlay, clabel = _cloud_overlay((latN, lonW, latS, lonE), w, h, cloud_rgb, cloud_alpha)
             if overlay is not None:
                 canvas.alpha_composite(overlay)
-                if clabel and not tlabel:
-                    tlabel = clabel
+                if clabel and src_dt is None:
+                    try:
+                        src_dt = datetime.fromisoformat(clabel).replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        pass
             continue
         url_of = lambda x, y, L=layer: _overlay_url(frames, L, z, x, y)
         paste_layer(lambda x, y: _fetch_img(url_of(x, y)) if url_of(x, y) else None, True)
         ts = frames.get("radar_time" if layer == "radar" else "sat_time")
-        if ts and not tlabel:
-            tlabel = datetime.fromtimestamp(ts, timezone.utc).strftime("%H:%M")
+        if ts and src_dt is None:
+            src_dt = datetime.fromtimestamp(ts, timezone.utc)
+    tlabel = local_time_label(src_dt, tz)
 
     # marker at the exact point (center of the canvas)
     d = ImageDraw.Draw(canvas)
@@ -1291,7 +1357,7 @@ ANM_RADAR_URL = os.environ.get(
     "https://www.meteoromania.ro/radar/mos.live.{date}.{hm}.0_mercator.png")
 ANM_RADAR_OFFSET_MIN = int(os.environ.get("TG_ANM_RADAR_OFFSET", "1"))
 ANM_RADAR_LOOKBACK = int(os.environ.get("TG_ANM_RADAR_LOOKBACK", "9"))
-_anm_radar_cache = {"t": 0, "png": None, "label": ""}
+_anm_radar_cache = {"t": 0, "png": None, "dt": None}
 
 def _anm_radar_candidates(now=None):
     """UTC timestamps to try, newest first: minute floored to 10 + OFFSET, then back."""
@@ -1303,10 +1369,10 @@ def _anm_radar_candidates(now=None):
             for i in range(ANM_RADAR_LOOKBACK + 1)]
 
 def anm_radar_image():
-    """Latest ANM national radar PNG. Returns (png_bytes, 'HH:MM') or (None, '')."""
+    """Latest ANM national radar PNG. Returns (png_bytes, dt_utc) or (None, None)."""
     now = time.time()
     if _anm_radar_cache["png"] and now - _anm_radar_cache["t"] < 300:
-        return _anm_radar_cache["png"], _anm_radar_cache["label"]
+        return _anm_radar_cache["png"], _anm_radar_cache["dt"]
     for ts in _anm_radar_candidates():
         url = ANM_RADAR_URL.format(date=ts.strftime("%Y%m%d"), hm=ts.strftime("%H%M"))
         try:
@@ -1314,10 +1380,9 @@ def anm_radar_image():
         except requests.RequestException:
             continue
         if r.status_code == 200 and r.content and "image" in r.headers.get("Content-Type", "").lower():
-            label = ts.strftime("%H:%M")
-            _anm_radar_cache.update(t=now, png=r.content, label=label)
-            return r.content, label
-    return None, ""
+            _anm_radar_cache.update(t=now, png=r.content, dt=ts)
+            return r.content, ts
+    return None, None
 
 def _merc_y(lat):
     return (1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0   # 0..1, north small
@@ -1346,15 +1411,16 @@ def _osm_base_for_bbox(W, S, E, N, out_w):
             canvas.paste(img, (int(round(tx * TILE - wx0)), int(round(ty * TILE - wy0))))
     return canvas, (w, h), (nx0, ny0, (nx1 - nx0), (ny1 - ny0))
 
-def build_anm_radar_map(mlat=None, mlon=None, base_dim=None, bbox=None):
+def build_anm_radar_map(mlat=None, mlon=None, base_dim=None, bbox=None, tz=None):
     """ANM national radar stretched onto a faded OSM base (georeferenced by bbox).
-    Optional marker at (mlat, mlon). Returns (png_bytes, 'HH:MM') or (None, '')."""
+    Optional marker at (mlat, mlon). Returns (png_bytes, time_label) or (None, '')."""
     if not _PIL:
         return None, ""
     base_dim = MAP_BASE_DIM if base_dim is None else base_dim
-    png_bytes, label = anm_radar_image()
+    png_bytes, dt_utc = anm_radar_image()
     if not png_bytes:
         return None, ""
+    label = local_time_label(dt_utc, tz)
     W, S, E, N = bbox if bbox else ANM_BBOX
     base, (w, h), (nx0, ny0, dnx, dny) = _osm_base_for_bbox(W, S, E, N, ANM_MAP_W)
     if base_dim > 0:                                           # fade the base
@@ -1623,6 +1689,93 @@ def cmd_soil(args, chat_id):
              f"  27\u201381cm: {val('soil_moisture_27_to_81cm', 100, '%')}"]
     return "\n".join(lines)
 
+# --- Air quality (Open-Meteo Air Quality API) ---
+# European AQI bands (EEA): 0-20 good, 20-40 fair, 40-60 moderate, 60-80 poor,
+# 80-100 very poor, 100+ extremely poor.
+def eaqi_band(aqi, lang):
+    if aqi is None:
+        return ("\u2754", tr("aqi_unknown", lang))
+    a = float(aqi)
+    if a <= 20:   return ("\U0001f7e2", tr("aqi_good", lang))
+    if a <= 40:   return ("\U0001f7e2", tr("aqi_fair", lang))
+    if a <= 60:   return ("\U0001f7e1", tr("aqi_moderate", lang))
+    if a <= 80:   return ("\U0001f7e0", tr("aqi_poor", lang))
+    if a <= 100:  return ("\U0001f534", tr("aqi_vpoor", lang))
+    return ("\U0001f7e3", tr("aqi_epoor", lang))
+
+def cmd_air(args, chat_id):
+    lang = get_lang(chat_id)
+    if not args:
+        return tr("air_usage", lang)
+    loc, err = find_location(" ".join(args), chat_id, lang)
+    if err:
+        return err
+    params = {
+        "latitude": loc["lat"], "longitude": loc["lon"], "timezone": "auto",
+        "current": "european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,"
+                   "sulphur_dioxide,carbon_monoxide,uv_index",
+    }
+    r = requests.get(AQI_URL, params=params, timeout=15)
+    r.raise_for_status()
+    cur = r.json().get("current", {})
+    if not cur:
+        return tr("air_nodata", lang)
+    emoji, label = eaqi_band(cur.get("european_aqi"), lang)
+    aqi = cur.get("european_aqi")
+    aqi_s = f"{round(aqi)}" if aqi is not None else "\u2014"
+
+    def v(key, unit, dec=0):
+        x = cur.get(key)
+        return f"{x:.{dec}f}{unit}" if isinstance(x, (int, float)) else "\u2014"
+
+    t = cur.get("time", "")
+    lines = [f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 {tr('air_title', lang)}",
+             tr("air_time_src", lang, t=t[-5:] if len(t) >= 5 else "") + "\n",
+             f"{emoji} <b>EAQI {aqi_s}</b> \u2014 {label}",
+             tr("air_pm25", lang, v=v("pm2_5", " \u00b5g/m\u00b3", 1)),
+             tr("air_pm10", lang, v=v("pm10", " \u00b5g/m\u00b3", 1)),
+             tr("air_o3", lang, v=v("ozone", " \u00b5g/m\u00b3")),
+             tr("air_no2", lang, v=v("nitrogen_dioxide", " \u00b5g/m\u00b3")),
+             tr("air_so2", lang, v=v("sulphur_dioxide", " \u00b5g/m\u00b3")),
+             tr("air_co", lang, v=v("carbon_monoxide", " \u00b5g/m\u00b3")),
+             tr("air_uv", lang, v=v("uv_index", "", 1))]
+    return "\n".join(lines)
+
+# --- Flood / river discharge (Open-Meteo Flood API, GloFAS) ---
+def cmd_flood(args, chat_id):
+    lang = get_lang(chat_id)
+    if not args:
+        return tr("flood_usage", lang)
+    toks = list(args)
+    days = 7
+    if toks and toks[-1].isdigit() and 1 <= int(toks[-1]) <= 30:
+        days = int(toks[-1])
+        toks = toks[:-1]
+    if not toks:
+        return tr("flood_usage", lang)
+    loc, err = find_location(" ".join(toks), chat_id, lang)
+    if err:
+        return err
+    params = {"latitude": loc["lat"], "longitude": loc["lon"],
+              "daily": "river_discharge", "forecast_days": days}
+    r = requests.get(FLOOD_URL, params=params, timeout=20)
+    r.raise_for_status()
+    daily = r.json().get("daily", {})
+    times = daily.get("time", [])
+    disch = daily.get("river_discharge", [])
+    if not times or all(d is None for d in disch):
+        return tr("flood_nodata", lang)
+    vals = [d for d in disch if isinstance(d, (int, float))]
+    peak = max(vals) if vals else 0
+    lines = [f"\U0001f30a <b>{loc_label(loc)}</b> — {tr('flood_title', lang)}",
+             tr("flood_src", lang) + "\n"]
+    for t, d in zip(times, disch):
+        ds = f"{d:.1f}" if isinstance(d, (int, float)) else "—"
+        mark = " ⚠️" if isinstance(d, (int, float)) and peak > 0 and d >= 0.9 * peak else ""
+        lines.append(f"{t[5:]}: <b>{ds}</b> m³/s{mark}")
+    lines.append("\n" + tr("flood_note", lang))
+    return "\n".join(lines)
+
 def cmd_hist(args, chat_id):
     lang = get_lang(chat_id)
     if len(args) < 3:
@@ -1701,8 +1854,10 @@ HELP = {
         "<code>44.816,29.879</code> \u2014 by coordinates\n"
         "<code>Orsova 3</code> \u2014 3-day forecast (up to 16)\n"
         "<code>3</code> \u2014 3-day forecast for all saved locations\n\n"
-        "<b>Soil &amp; history</b>\n"
+        "<b>Soil, air &amp; history</b>\n"
         "<code>soil Orsova</code> \u2014 soil moisture + temperature now\n"
+        "<code>air Orsova</code> \u2014 air quality (European AQI + pollutants)\n"
+        "<code>flood Orsova</code> \u2014 river discharge forecast (GloFAS)\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 past weather for a period\n\n"
         "<b>Maps</b>\n"
         "<code>radar</code> \u2014 national radar (ANM) over a faded map\n"
@@ -1743,8 +1898,10 @@ HELP = {
         "<code>44.816,29.879</code> \u2014 dupa coordonate\n"
         "<code>Orsova 3</code> \u2014 prognoza pe 3 zile (pana la 16)\n"
         "<code>3</code> \u2014 prognoza pe 3 zile pentru toate locatiile salvate\n\n"
-        "<b>Sol &amp; istoric</b>\n"
+        "<b>Sol, aer &amp; istoric</b>\n"
         "<code>soil Orsova</code> \u2014 umiditatea solului + temperatura acum\n"
+        "<code>air Orsova</code> \u2014 calitatea aerului (AQI european + poluanti)\n"
+        "<code>flood Orsova</code> \u2014 prognoza debit rau (GloFAS)\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 vremea din trecut pe o perioada\n\n"
         "<b>Harti</b>\n"
         "<code>radar</code> \u2014 radar national (ANM) peste harta estompata\n"
@@ -1827,13 +1984,13 @@ def _map_cmd(args, chat_id, layers, label_key, src_key="map_src"):
     try:
         png, tlabel = build_map(loc["lat"], loc["lon"], layers, z=cfg["zoom"],
                                 base_dim=cfg["base_dim"], cloud_rgb=tuple(cfg["cloud_rgb"]),
-                                cloud_alpha=cfg["cloud_alpha"])
+                                cloud_alpha=cfg["cloud_alpha"], tz=cfg.get("tz", ""))
     except Exception as e:
         return tr("err_generic", lang, e=e)
     if not png:
         return tr("map_nodata", lang)
     cap = f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 {tr(label_key, lang)}"
-    cap += ("\n" + (f"{tlabel} UTC \u00b7 " if tlabel else "") + tr(src_key, lang))
+    cap += ("\n" + (f"{tlabel} \u00b7 " if tlabel else "") + tr(src_key, lang))
     return Photo(png, cap)
 
 def cmd_radar(args, chat_id):
@@ -1853,13 +2010,13 @@ def cmd_radar(args, chat_id):
         mlat, mlon = loc["lat"], loc["lon"]
     try:
         png, tlabel = build_anm_radar_map(mlat, mlon, base_dim=cfg["base_dim"],
-                                          bbox=tuple(cfg["anm_bbox"]))
+                                          bbox=tuple(cfg["anm_bbox"]), tz=cfg.get("tz", ""))
     except Exception as e:
         return tr("err_generic", lang, e=e)
     if not png:
         return tr("map_nodata", lang)
     cap = f"\U0001f4e1 <b>{tr('cap_radar', lang)}</b>"
-    cap += "\n" + (f"{tlabel} UTC · " if tlabel else "") + tr("map_src_anm", lang)
+    cap += "\n" + (f"{tlabel} · " if tlabel else "") + tr("map_src_anm", lang)
     return Photo(png, cap)
 
 def cmd_sat(args, chat_id):
@@ -1877,7 +2034,8 @@ def cmd_mapset(args, chat_id):
         return tr("mapset_current", lang,
                   src=cfg["radar_src"], dim=f"{cfg['base_dim']:g}",
                   alpha=cfg["cloud_alpha"], rgb=",".join(map(str, cfg["cloud_rgb"])),
-                  zoom=cfg["zoom"], bbox=",".join(f"{x:g}" for x in cfg["anm_bbox"]))
+                  zoom=cfg["zoom"], bbox=",".join(f"{x:g}" for x in cfg["anm_bbox"]),
+                  tz=(cfg.get("tz") or "auto (server)"))
     key = args[0].lower()
     rest = args[1:]
     val = rest[0] if rest else ""
@@ -1933,6 +2091,15 @@ def cmd_mapset(args, chat_id):
             return tr("mapset_bbox_usage", lang)
         set_map_cfg(chat_id, "anm_bbox", bb)
         return tr("mapset_set", lang, k="bbox", v=",".join(f"{x:g}" for x in bb))
+    if key in ("tz", "timezone", "fus"):
+        v = val.strip()
+        if v.lower() in ("auto", "server", "local", "reset", ""):
+            set_map_cfg(chat_id, "tz", "")
+            return tr("mapset_set", lang, k="tz", v="auto (server)")
+        if _resolve_tz(v) is None:               # not a valid offset or IANA name
+            return tr("mapset_tz_usage", lang)
+        set_map_cfg(chat_id, "tz", v)
+        return tr("mapset_set", lang, k="tz", v=v)
     if key in ("reset", "default", "defaults"):
         reset_map_cfg(chat_id)
         return tr("mapset_reset", lang)
@@ -2047,6 +2214,7 @@ COMMANDS = {
     "wx": cmd_wx, "model": cmd_model,
     "save": cmd_save, "locs": cmd_locs, "del": cmd_del, "alerts": cmd_alerts,
     "set": cmd_set, "units": cmd_units, "soil": cmd_soil, "hist": cmd_hist,
+    "air": cmd_air, "aer": cmd_air, "flood": cmd_flood, "inundatii": cmd_flood,
     "lang": cmd_lang, "anm": cmd_anm, "alarm": cmd_alarm, "alarma": cmd_alarm,
     "radar": cmd_radar, "sat": cmd_sat, "satelit": cmd_sat,
     "map": cmd_map, "harta": cmd_map, "mapset": cmd_mapset, "hartaset": cmd_mapset,
