@@ -73,10 +73,15 @@ import json
 import re
 import math
 import hashlib
-import html
 import unicodedata
 import threading
 import requests
+from io import BytesIO
+try:
+    from PIL import Image, ImageDraw
+    _PIL = True
+except Exception:
+    _PIL = False
 from datetime import datetime, timezone, timedelta
 
 # --- Config ---
@@ -435,6 +440,14 @@ T = {
     "anm_code": {"en": "Code: {color}", "ro": "Cod: {color}"},
     "anm_valid": {"en": "valid: {v}", "ro": "valabil: {v}"},
     "anm_src": {"en": "source: meteoromania.ro (ANM)", "ro": "sursa: meteoromania.ro (ANM)"},
+    "cap_radar": {"en": "Radar", "ro": "Radar"},
+    "radar_natl": {"en": "national (ANM)", "ro": "național (ANM)"},
+    "cap_sat": {"en": "Satellite", "ro": "Satelit"},
+    "cap_map": {"en": "Radar + Satellite", "ro": "Radar + Satelit"},
+    "map_src": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
+    "map_nopil": {"en": "Image maps need Pillow: <code>pip install pillow</code>",
+                  "ro": "Hartile necesita Pillow: <code>pip install pillow</code>"},
+    "map_nodata": {"en": "No map data available right now.", "ro": "Fara date de harta momentan."},
     "anm_off_word": {"en": "off", "ro": "oprit"},
     "anm_current": {
         "en": "ANM warnings: <b>{feeds}</b>\nSet with: <code>anm nowcasting,general</code> | <code>anm nowcasting</code> | <code>anm off</code>",
@@ -622,24 +635,6 @@ def forecast(lat, lon, model_id, units):
         "temperature_unit": OM_TEMP[units["temp"]],
         "wind_speed_unit": units["wind"],
         "precipitation_unit": OM_PRECIP[units["rain"]],
-    }
-    if model_id and model_id != "best_match":
-        params["models"] = model_id
-    r = requests.get(FC_URL, params=params, timeout=15)
-    r.raise_for_status()
-    return r.json()
-
-def fetch_alert_forecast(lat, lon, model_id):
-    """Raw hourly data for alert evaluation, in metric units so the values
-    match the thresholds (gust km/h, rain mm, snow cm, temp degC). Returns the
-    Open-Meteo JSON consumed by evaluate_alerts()."""
-    params = {
-        "latitude": lat, "longitude": lon,
-        "hourly": "temperature_2m,precipitation,snowfall,wind_gusts_10m",
-        "forecast_days": 2, "timezone": "auto",
-        "wind_speed_unit": "kmh",
-        "precipitation_unit": "mm",
-        "temperature_unit": "celsius",
     }
     if model_id and model_id != "best_match":
         params["models"] = model_id
@@ -883,7 +878,6 @@ def point_in_rings(x, y, rings):
 
 def anm_clean(s):
     s = re.sub(r"<[^>]+>", " ", s or "")
-    s = html.unescape(s)                 # &ndash;->–, &acirc;->â, &icirc;->î, &nbsp;->space
     return re.sub(r"\s+", " ", s).strip()
 
 def anm_walk(node, ctx, out):
@@ -946,20 +940,17 @@ def anm_get_areas():
 def format_anm_alert(loc, area, lang):
     emoji, ro_name, en_name = ANM_COLORS.get(area["culoare"], ("\u26a0\ufe0f", "", ""))
     cname = ro_name if lang == "ro" else en_name
-    # ANM text is user-facing free text; escape &, <, > so Telegram's HTML
-    # parser accepts the message (otherwise it rejects it and nothing arrives).
-    lines = [f"{emoji} <b>{tr('anm_hdr', lang)} \u2014 {html.escape(loc_label(loc))}</b>",
-             tr("anm_code", lang, color=html.escape(cname))]
+    lines = [f"{emoji} <b>{tr('anm_hdr', lang)} \u2014 {loc_label(loc)}</b>",
+             tr("anm_code", lang, color=cname)]
     fen = area.get("fenomen", "")
     if fen and "conform" not in fen.lower():
-        lines.append(html.escape(html.unescape(fen.strip())))
+        lines.append(fen)
     valid = area.get("interval") or area.get("expira")
     if valid and "conform" not in valid.lower():
-        lines.append(tr("anm_valid", lang, v=html.escape(html.unescape(valid.strip()))))
+        lines.append(tr("anm_valid", lang, v=valid))
     body = anm_clean(area.get("mesaj", ""))
     if body:
-        # send() splits long messages, so deliver the full warning (no cut).
-        lines.append(html.escape(body.strip()))
+        lines.append(body[:400].strip())
     lines.append(tr("anm_src", lang))
     return "\n".join(lines)
 
@@ -987,6 +978,159 @@ def anm_alerts_for(chat_id, slot, loc, areas, lang):
         mark_sent(chat_id, key, today)
         msgs.append(format_anm_alert(loc, area, lang))
     return msgs
+
+# --- Radar / satellite maps (RainViewer tiles + OpenStreetMap base) --------------
+TILE = 256
+MAP_ZOOM = int(os.environ.get("TG_MAP_ZOOM", "6"))     # regional view (RainViewer max 7)
+MAP_W = int(os.environ.get("TG_MAP_W", "720"))
+MAP_H = int(os.environ.get("TG_MAP_H", "720"))
+OSM_TILE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+RAINVIEWER_INDEX = "https://api.rainviewer.com/public/weather-maps.json"
+_TILE_UA = {"User-Agent": "OpenMeteoBot/1.0 (personal weather bot)"}
+_rv_cache = {"t": 0, "data": None}
+
+class Photo:
+    """Marker return type: an image response instead of text."""
+    def __init__(self, data, caption=""):
+        self.data = data
+        self.caption = caption
+
+def lonlat_to_tilexy(lat, lon, z):
+    n = 2 ** z
+    x = (lon + 180.0) / 360.0 * n
+    y = (1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n
+    return x, y
+
+def rainviewer_frames():
+    """Cached RainViewer index -> latest radar & satellite tile paths."""
+    now = time.time()
+    if _rv_cache["data"] and now - _rv_cache["t"] < 300:
+        return _rv_cache["data"]
+    out = {"host": "", "radar": None, "satellite": None, "radar_time": 0, "sat_time": 0}
+    try:
+        r = requests.get(RAINVIEWER_INDEX, timeout=15, headers=_TILE_UA)
+        r.raise_for_status()
+        j = r.json()
+        out["host"] = j.get("host", "https://tilecache.rainviewer.com")
+        past = (j.get("radar", {}) or {}).get("past", [])
+        if past:
+            out["radar"] = past[-1]["path"]
+            out["radar_time"] = past[-1]["time"]
+        ir = (j.get("satellite", {}) or {}).get("infrared", [])
+        if ir:
+            out["satellite"] = ir[-1]["path"]
+            out["sat_time"] = ir[-1]["time"]
+    except (requests.RequestException, ValueError, KeyError, IndexError):
+        pass
+    _rv_cache["t"] = now
+    _rv_cache["data"] = out
+    return out
+
+def _fetch_img(url):
+    try:
+        r = requests.get(url, timeout=12, headers=_TILE_UA)
+        if r.status_code != 200 or not r.content:
+            return None
+        return Image.open(BytesIO(r.content)).convert("RGBA")
+    except Exception:
+        return None
+
+def _overlay_url(frames, layer, z, x, y):
+    host = frames["host"]
+    path = frames.get(layer)
+    if not path:
+        return None
+    if layer == "radar":
+        return f"{host}{path}/{TILE}/{z}/{x}/{y}/4/1_1.png"      # color 4, smooth+snow
+    return f"{host}{path}/{TILE}/{z}/{x}/{y}/0/0_0.png"          # satellite
+
+def build_map(lat, lon, layers, z=None, w=None, h=None):
+    """Stitch OSM base + RainViewer overlays, centered on the point, with a marker.
+    Returns (png_bytes, time_label) or (None, '')."""
+    if not _PIL:
+        return None, ""
+    z = z or MAP_ZOOM
+    w = w or MAP_W
+    h = h or MAP_H
+    n = 2 ** z
+    frames = rainviewer_frames()
+    fx, fy = lonlat_to_tilexy(lat, lon, z)
+    cpx, cpy = fx * TILE, fy * TILE
+    left, top = cpx - w / 2.0, cpy - h / 2.0
+    x0, x1 = math.floor(left / TILE), math.floor((left + w) / TILE)
+    y0, y1 = math.floor(top / TILE), math.floor((top + h) / TILE)
+    canvas = Image.new("RGBA", (w, h), (30, 30, 30, 255))
+
+    def paste_layer(getter, composite):
+        for tx in range(x0, x1 + 1):
+            for ty in range(y0, y1 + 1):
+                if ty < 0 or ty >= n:
+                    continue
+                img = getter(tx % n, ty)
+                if not img:
+                    continue
+                px = int(round(tx * TILE - left))
+                py = int(round(ty * TILE - top))
+                if composite:
+                    canvas.alpha_composite(img, (px, py))
+                else:
+                    canvas.paste(img, (px, py))
+
+    paste_layer(lambda x, y: _fetch_img(OSM_TILE.format(z=z, x=x, y=y)), False)
+    tlabel = ""
+    for layer in layers:
+        url_of = lambda x, y, L=layer: _overlay_url(frames, L, z, x, y)
+        paste_layer(lambda x, y: _fetch_img(url_of(x, y)) if url_of(x, y) else None, True)
+        ts = frames.get("radar_time" if layer == "radar" else "sat_time")
+        if ts and not tlabel:
+            tlabel = datetime.fromtimestamp(ts, timezone.utc).strftime("%H:%M")
+
+    # marker at the exact point (center of the canvas)
+    d = ImageDraw.Draw(canvas)
+    mx, my = w // 2, h // 2
+    d.ellipse([mx - 7, my - 7, mx + 7, my + 7], outline=(255, 0, 0, 255), width=3)
+    d.ellipse([mx - 2, my - 2, mx + 2, my + 2], fill=(255, 0, 0, 255))
+
+    buf = BytesIO()
+    canvas.convert("RGB").save(buf, format="PNG")
+    return buf.getvalue(), tlabel
+
+# --- ANM national radar image (meteoromania.ro, same source as ANM) --------------
+# Filenames embed a UTC timestamp, e.g. mos.live.20260728.0441.0_mercator.png,
+# refreshed every 10 min at minute ~:01. We probe backwards until one exists.
+ANM_RADAR_URL = os.environ.get(
+    "TG_ANM_RADAR_URL",
+    "https://www.meteoromania.ro/radar/mos.live.{date}.{hm}.0_mercator.png")
+ANM_RADAR_OFFSET_MIN = int(os.environ.get("TG_ANM_RADAR_OFFSET", "1"))   # minute past each 10-min slot
+ANM_RADAR_LOOKBACK = int(os.environ.get("TG_ANM_RADAR_LOOKBACK", "9"))   # 10-min slots to try back (~90 min)
+_anm_radar_cache = {"t": 0, "png": None, "label": ""}
+
+def _anm_radar_candidates(now=None):
+    """UTC timestamps to try, newest first: minute floored to 10 + OFFSET, then back.
+    Skips the current slot if its image isn't due yet (offset minutes not elapsed)."""
+    now = (now or datetime.now(timezone.utc)).replace(second=0, microsecond=0)
+    base = now.replace(minute=(now.minute // 10) * 10)
+    if base + timedelta(minutes=ANM_RADAR_OFFSET_MIN) > now:
+        base -= timedelta(minutes=10)          # current slot's image not out yet
+    return [base - timedelta(minutes=10 * i) + timedelta(minutes=ANM_RADAR_OFFSET_MIN)
+            for i in range(ANM_RADAR_LOOKBACK + 1)]
+
+def anm_radar_image():
+    """Latest ANM national radar PNG. Returns (png_bytes, 'HH:MM') or (None, '')."""
+    now = time.time()
+    if _anm_radar_cache["png"] and now - _anm_radar_cache["t"] < 300:
+        return _anm_radar_cache["png"], _anm_radar_cache["label"]
+    for ts in _anm_radar_candidates():
+        url = ANM_RADAR_URL.format(date=ts.strftime("%Y%m%d"), hm=ts.strftime("%H%M"))
+        try:
+            r = requests.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0"})
+        except requests.RequestException:
+            continue
+        if r.status_code == 200 and r.content and "image" in r.headers.get("Content-Type", "").lower():
+            label = ts.strftime("%H:%M")
+            _anm_radar_cache.update(t=now, png=r.content, label=label)
+            return r.content, label
+    return None, ""
 
 def already_sent(chat_id, key):
     return key in load_state().get(str(chat_id), {}).get("alerts_sent", {})
@@ -1308,6 +1452,10 @@ HELP = {
         "<b>Soil &amp; history</b>\n"
         "<code>soil Orsova</code> \u2014 soil moisture + temperature now\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 past weather for a period\n\n"
+        "<b>Maps</b>\n"
+        "<code>radar</code> \u2014 national radar (ANM)\n"
+        "<code>sat Orsova</code> \u2014 satellite map\n"
+        "<code>map Orsova</code> \u2014 radar + satellite\n\n"
         "<b>Model</b>\n"
         "<code>model</code> \u2014 show the current model and the list of models\n"
         "<code>model iconeu</code> \u2014 set the default model (name from the list)\n\n"
@@ -1344,6 +1492,10 @@ HELP = {
         "<b>Sol &amp; istoric</b>\n"
         "<code>soil Orsova</code> \u2014 umiditatea solului + temperatura acum\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 vremea din trecut pe o perioada\n\n"
+        "<b>Harti</b>\n"
+        "<code>radar</code> \u2014 harta radar nationala (ANM)\n"
+        "<code>sat Orsova</code> \u2014 harta satelit\n"
+        "<code>map Orsova</code> \u2014 radar + satelit\n\n"
         "<b>Model</b>\n"
         "<code>model</code> \u2014 arata modelul curent si lista de modele\n"
         "<code>model iconeu</code> \u2014 seteaza modelul implicit (nume din lista)\n\n"
@@ -1406,12 +1558,52 @@ def cmd_anm(args, chat_id):
     set_anm_feeds(chat_id, feeds)
     return tr("anm_set", lang, feeds=", ".join(feeds))
 
+def _map_cmd(args, chat_id, layers, label_key):
+    lang = get_lang(chat_id)
+    if not _PIL:
+        return tr("map_nopil", lang)
+    if not args:
+        return tr("wx_usage_short", lang)
+    loc, err = find_location(" ".join(args), chat_id, lang)
+    if err:
+        return err
+    try:
+        png, tlabel = build_map(loc["lat"], loc["lon"], layers)
+    except Exception as e:
+        return tr("err_generic", lang, e=e)
+    if not png:
+        return tr("map_nodata", lang)
+    cap = f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 {tr(label_key, lang)}"
+    cap += ("\n" + (f"{tlabel} UTC \u00b7 " if tlabel else "") + tr("map_src", lang))
+    return Photo(png, cap)
+
+def cmd_radar(args, chat_id):
+    # National radar straight from ANM (meteoromania.ro) — one image, no location.
+    lang = get_lang(chat_id)
+    try:
+        png, tlabel = anm_radar_image()
+    except Exception as e:
+        return tr("err_generic", lang, e=e)
+    if not png:
+        return tr("map_nodata", lang)
+    cap = f"\U0001f4e1 <b>{tr('cap_radar', lang)}</b> — {tr('radar_natl', lang)}"
+    cap += "\n" + (f"{tlabel} UTC · " if tlabel else "") + tr("anm_src", lang)
+    return Photo(png, cap)
+
+def cmd_sat(args, chat_id):
+    return _map_cmd(args, chat_id, ["satellite"], "cap_sat")
+
+def cmd_map(args, chat_id):
+    return _map_cmd(args, chat_id, ["satellite", "radar"], "cap_map")
+
 # --- Command router (easy to extend) ---
 COMMANDS = {
     "wx": cmd_wx, "model": cmd_model,
     "save": cmd_save, "locs": cmd_locs, "del": cmd_del, "alerts": cmd_alerts,
     "set": cmd_set, "units": cmd_units, "soil": cmd_soil, "hist": cmd_hist,
     "lang": cmd_lang, "anm": cmd_anm,
+    "radar": cmd_radar, "sat": cmd_sat, "satelit": cmd_sat,
+    "map": cmd_map, "harta": cmd_map,
     "start": cmd_start, "help": cmd_start,
 }
 
@@ -1437,45 +1629,22 @@ def handle_text(text, chat_id, lang_hint=None):
         return tr("err_generic", lang, e=e)
 
 # --- Telegram ---
-TG_LIMIT = 4096   # Telegram hard limit per message (chars)
-
-def _split_message(text, limit=TG_LIMIT):
-    """Split long text into <=limit chunks, preferring line boundaries so we
-    don't cut inside an HTML tag."""
-    if len(text) <= limit:
-        return [text]
-    chunks, cur = [], ""
-    for line in text.split("\n"):
-        while len(line) > limit:        # a single line longer than the limit
-            if cur:
-                chunks.append(cur)
-                cur = ""
-            chunks.append(line[:limit])
-            line = line[limit:]
-        add = line if not cur else "\n" + line
-        if len(cur) + len(add) > limit:
-            chunks.append(cur)
-            cur = line
-        else:
-            cur += add
-    if cur:
-        chunks.append(cur)
-    return chunks
-
-def _post_message(chat_id, text):
+def send(chat_id, text):
     try:
-        r = requests.post(f"{TG_API}/sendMessage", json={
+        requests.post(f"{TG_API}/sendMessage", json={
             "chat_id": chat_id, "text": text,
             "parse_mode": "HTML", "disable_web_page_preview": True,
         }, timeout=15)
-        if not r.ok:
-            print(f"Telegram rejected message (chat {chat_id}): {r.status_code} {r.text}")
     except requests.RequestException as e:
         print("Send error:", e)
 
-def send(chat_id, text):
-    for chunk in _split_message(text):
-        _post_message(chat_id, chunk)
+def send_photo(chat_id, data, caption=""):
+    try:
+        requests.post(f"{TG_API}/sendPhoto",
+                      data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                      files={"photo": ("map.png", data, "image/png")}, timeout=30)
+    except requests.RequestException as e:
+        print("sendPhoto error:", e)
 
 def is_allowed(user_id, chat_id):
     if not ALLOWED_USERS:
@@ -1546,7 +1715,9 @@ def main():
                 if not is_allowed(user_id, chat_id):
                     continue
                 reply = handle_text(text, chat_id, lang_hint)
-                if reply:
+                if isinstance(reply, Photo):
+                    send_photo(chat_id, reply.data, reply.caption)
+                elif reply:
                     send(chat_id, reply)
         except requests.RequestException as e:
             print("Network error:", e)
