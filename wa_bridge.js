@@ -22,11 +22,25 @@ const express = require('express');
 const axios = require('axios');
 const P = require('pino');
 const qrcode = require('qrcode-terminal');
+const fs = require('fs');
 
 const PY_URL = process.env.PY_URL || 'http://127.0.0.1:5000/incoming';
 const PORT = parseInt(process.env.WA_PORT || '3000', 10);
 const ALLOWED = (process.env.WA_ALLOWED || '')
   .split(',').map(s => s.trim()).filter(Boolean);
+
+// Heartbeat file the Telegram bot reads to know the WhatsApp link is healthy.
+const STATUS_FILE = process.env.WA_STATUS_FILE || 'wa_status.json';
+function writeStatus() {
+  try {
+    fs.writeFileSync(STATUS_FILE, JSON.stringify({
+      ts: Math.floor(Date.now() / 1000),
+      connected: connected,
+      loggedOut: loggedOut,
+    }));
+  } catch (_) { /* ignore */ }
+}
+setInterval(writeStatus, 30000);   // refresh the heartbeat every 30s
 
 let sock = null;
 let connected = false;
@@ -67,7 +81,7 @@ async function start() {
         console.log('Scan this QR in WhatsApp > Linked devices:');
         qrcode.generate(qr, { small: true });
       }
-      if (connection === 'open') { connected = true; markActivity(); console.log('WhatsApp connected.'); }
+      if (connection === 'open') { connected = true; markActivity(); writeStatus(); console.log('WhatsApp connected.'); }
       if (connection === 'close') {
         connected = false;
         const err = lastDisconnect && lastDisconnect.error;
@@ -77,9 +91,11 @@ async function start() {
                      code === DisconnectReason.connectionReplaced;
         if (stop) {
           loggedOut = true;
+          writeStatus();
           console.log('Not reconnecting (logged out or session replaced). '
                       + 'Delete the wa_auth folder and restart to re-scan.');
         } else {
+          writeStatus();
           scheduleReconnect(3000);           // back off before retrying
         }
       }

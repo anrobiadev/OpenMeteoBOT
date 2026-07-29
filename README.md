@@ -433,6 +433,7 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `mapset` | Map settings (radar source, dim, cloud colour/opacity, zoom, time zone) |
 | `alarm 1 21:05` / `alarm off` | Daily 24h forecast for a saved slot at a set time |
 | `interval 10` | Set how often alerts are checked, in minutes (global) |
+| `sysstatus` | Health report: bot core, WhatsApp link, interval, this chat's settings |
 | `model` / `model iconeu` | Show / set the weather model |
 | `save 1 Orsova` | Save a location in slot 1 |
 | `locs` | List saved locations |
@@ -471,6 +472,19 @@ resent on every cycle.
 
   The ANM radar image geo-bounds are fixed in the code (correct national extent),
   overridable only via the `TG_ANM_BBOX` env var if ever needed.
+
+### Health monitoring & `sysstatus`
+
+- **`sysstatus`** (aliases `status`, `sys`) prints an on-demand health report:
+  bot core, WhatsApp link state (connected / disconnected / logged out / bridge
+  down, with heartbeat age), the alert interval, and this chat's saved
+  locations / alarms / ANM feeds / map time zone.
+- **Automatic Telegram alert when WhatsApp breaks.** The Node bridge writes a
+  heartbeat (`wa_status.json`); the Telegram bot watches it and messages
+  `TG_ADMIN_CHAT` if WhatsApp is **logged out**, **disconnected**, or the **bridge
+  is down/hung** (no heartbeat), then a "back online" note on recovery. Set
+  `TG_ADMIN_CHAT` to your Telegram ID (or rely on the first `TG_ALLOWED_USERS`);
+  without it, monitoring is off. Both services must share the same working folder.
 
 ### Daily forecast alarm (`alarm`)
 
@@ -511,6 +525,9 @@ warning text and color come straight from ANM.
 |---|---|---|---|
 | `TG_BOT_TOKEN` | meteo_bot | — | Telegram token (@BotFather) |
 | `TG_ALLOWED_USERS` | meteo_bot | empty | Allowed Telegram IDs (empty = anyone) |
+| `TG_ADMIN_CHAT` | meteo_bot | first allowed user | Telegram chat that gets WhatsApp-down alerts |
+| `WA_STATUS_FILE` | both | `wa_status.json` | WhatsApp heartbeat file (bridge writes, bot reads) |
+| `WA_HEARTBEAT_STALE` | meteo_bot | `300` | Seconds without heartbeat before "bridge down" alert |
 | `TG_BOT_STATE` | both Python | `bot_state.json` | State file |
 | `TG_ALERT_INTERVAL` | both Python | `900` | Alert check interval (seconds; 900 = 15 min) |
 | `TG_ANM` | both Python | `1` | ANM official warnings on/off globally (`0` = off) |

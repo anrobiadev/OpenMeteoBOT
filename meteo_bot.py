@@ -96,6 +96,13 @@ ALLOWED_USERS = {
 }
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
+# WhatsApp health monitoring: the Node bridge writes WA_STATUS_FILE; the Telegram
+# bot watches it and warns ADMIN_CHAT if WhatsApp goes down / is logged out.
+WA_STATUS_FILE = os.environ.get("WA_STATUS_FILE", "wa_status.json")
+WA_HEARTBEAT_STALE = int(os.environ.get("WA_HEARTBEAT_STALE", "300"))   # seconds
+ADMIN_CHAT = os.environ.get("TG_ADMIN_CHAT", "") or (
+    sorted(ALLOWED_USERS)[0] if ALLOWED_USERS else "")
+
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FC_URL = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"  # ERA5 history
@@ -591,6 +598,17 @@ T = {
                      "ro": "Interval verificare alerte setat la <b>{m} min</b> ({s}s). Se aplica pe Telegram &amp; WhatsApp."},
     "interval_usage": {"en": "Use: <code>interval 10</code> — minutes (min 1, max 1440).",
                        "ro": "Foloseste: <code>interval 10</code> — minute (min 1, max 1440)."},
+    "sys_title": {"en": "System status", "ro": "Status sistem"},
+    "sys_core": {"en": "🤖 Bot core: <b>online</b>", "ro": "🤖 Nucleu bot: <b>online</b>"},
+    "sys_wa_ok": {"en": "WhatsApp: <b>connected</b> (heartbeat {s}s ago)", "ro": "WhatsApp: <b>conectat</b> (heartbeat acum {s}s)"},
+    "sys_wa_disc": {"en": "WhatsApp: <b>disconnected</b> (reconnecting…)", "ro": "WhatsApp: <b>deconectat</b> (se reconecteaza…)"},
+    "sys_wa_logout": {"en": "WhatsApp: <b>logged out</b> — re-scan the QR", "ro": "WhatsApp: <b>delogat</b> — rescaneaza QR-ul"},
+    "sys_wa_down": {"en": "WhatsApp: <b>bridge down</b> (no heartbeat for {s}s)", "ro": "WhatsApp: <b>puntea oprita</b> (fara heartbeat de {s}s)"},
+    "sys_wa_none": {"en": "WhatsApp: not configured", "ro": "WhatsApp: neconfigurat"},
+    "sys_interval": {"en": "⏱ Alert check: every <b>{m} min</b>", "ro": "⏱ Verificare alerte: la <b>{m} min</b>"},
+    "sys_anm": {"en": "🇷🇴 ANM warnings: <b>{feeds}</b>", "ro": "🇷🇴 Avertizari ANM: <b>{feeds}</b>"},
+    "sys_chat": {"en": "📍 Saved: <b>{n}</b> · ⏰ alarms: <b>{a}</b> · 🕒 map tz: <b>{tz}</b>",
+                 "ro": "📍 Salvate: <b>{n}</b> · ⏰ alarme: <b>{a}</b> · 🕒 fus harti: <b>{tz}</b>"},
     "anm_off_word": {"en": "off", "ro": "oprit"},
     "anm_current": {
         "en": "ANM warnings: <b>{feeds}</b>\nSet with: <code>anm nowcasting,general</code> | <code>anm nowcasting</code> | <code>anm off</code>",
@@ -1909,7 +1927,8 @@ HELP = {
         "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n"
         "<code>anm</code> \u2014 official ANM warnings: <code>anm nowcasting,general</code> / <code>anm off</code>\n"
         "<code>alarm 1 21:05</code> \u2014 daily 24h forecast for slot 1 at 21:05 (<code>alarm off</code>)\n"
-        "<code>interval 10</code> \u2014 how often alerts are checked, in minutes\n\n"
+        "<code>interval 10</code> \u2014 how often alerts are checked, in minutes\n"
+        "<code>sysstatus</code> \u2014 service health (bot core, WhatsApp link, settings)\n\n"
         "<b>Units &amp; language</b>\n"
         "<code>units</code> \u2014 show current display units\n"
         "<code>units temp F</code> \u2014 set units (temp C/F, wind kmh/ms/mph/kn, "
@@ -1955,7 +1974,8 @@ HELP = {
         "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n"
         "<code>anm</code> \u2014 avertizari oficiale ANM: <code>anm nowcasting,general</code> / <code>anm off</code>\n"
         "<code>alarm 1 21:05</code> \u2014 prognoza zilnica 24h pentru slotul 1 la 21:05 (<code>alarm off</code>)\n"
-        "<code>interval 10</code> \u2014 cat de des se verifica alertele, in minute\n\n"
+        "<code>interval 10</code> \u2014 cat de des se verifica alertele, in minute\n"
+        "<code>sysstatus</code> \u2014 starea serviciilor (nucleu bot, WhatsApp, setari)\n\n"
         "<b>Unitati &amp; limba</b>\n"
         "<code>units</code> \u2014 arata unitatile de afisare curente\n"
         "<code>units temp F</code> \u2014 seteaza unitatile (temp C/F, wind kmh/ms/mph/kn, "
@@ -2230,6 +2250,51 @@ def alarm_loop():
             print("Alarm loop error:", e)
         time.sleep(30)
 
+# --- WhatsApp health (read the bridge's heartbeat file) ---
+def wa_health():
+    """Return (state, age_seconds). state: ok / disconnected / loggedout / down / none."""
+    try:
+        with open(WA_STATUS_FILE, "r", encoding="utf-8") as f:
+            s = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return ("none", None)
+    age = int(time.time() - s.get("ts", 0))
+    if age > WA_HEARTBEAT_STALE:
+        return ("down", age)
+    if s.get("loggedOut"):
+        return ("loggedout", age)
+    if not s.get("connected"):
+        return ("disconnected", age)
+    return ("ok", age)
+
+def wa_monitor_loop():
+    """Warn ADMIN_CHAT on Telegram when WhatsApp goes down / is logged out."""
+    if not ADMIN_CHAT:
+        print("WA monitor off: set TG_ADMIN_CHAT (or TG_ALLOWED_USERS) to get WhatsApp-down alerts.")
+        return
+    bad, alerted = 0, False
+    msgs = {
+        "down": "\U0001f534 WhatsApp bridge not responding (no heartbeat) — process stopped or hung.",
+        "loggedout": "\U0001f534 WhatsApp logged out — re-scan the QR to reconnect.",
+        "disconnected": "⚠️ WhatsApp disconnected — trying to reconnect…",
+    }
+    while True:
+        try:
+            state, _age = wa_health()
+            if state in ("ok", "none"):
+                if alerted and state == "ok":
+                    send(ADMIN_CHAT, "✅ WhatsApp is back online.")
+                alerted = False
+                bad = 0
+            else:
+                bad += 1
+                if bad >= 3 and not alerted:      # ~3 min debounce (60s loop)
+                    send(ADMIN_CHAT, msgs.get(state, "⚠️ WhatsApp problem."))
+                    alerted = True
+        except Exception as e:
+            print("WA monitor error:", e)
+        time.sleep(60)
+
 def cmd_interval(args, chat_id):
     """Show/set the background alert-check interval (in minutes; applies to everyone)."""
     lang = get_lang(chat_id)
@@ -2245,6 +2310,33 @@ def cmd_interval(args, chat_id):
     set_alert_interval(mins * 60)
     return tr("interval_set", lang, m=mins, s=mins * 60)
 
+def cmd_sysstatus(args, chat_id):
+    """Clear on-demand health report: bot core, WhatsApp link, interval, this chat."""
+    lang = get_lang(chat_id)
+    state, age = wa_health()
+    wa = {
+        "ok": tr("sys_wa_ok", lang, s=(age if age is not None else 0)),
+        "disconnected": tr("sys_wa_disc", lang),
+        "loggedout": tr("sys_wa_logout", lang),
+        "down": tr("sys_wa_down", lang, s=(age if age is not None else 0)),
+        "none": tr("sys_wa_none", lang),
+    }[state]
+    cdata = load_state().get(str(chat_id), {})
+    nloc = len(cdata.get("locations", {}))
+    alarms = cdata.get("alarms", {})
+    feeds = cdata.get("anm_feeds", list(DEFAULT_ANM_FEEDS))
+    feeds_s = ", ".join(feeds) if feeds else tr("anm_off_word", lang)
+    tzc = get_map_cfg(chat_id).get("tz") or "auto"
+    lines = [
+        f"\U0001fa7a <b>{tr('sys_title', lang)}</b>",
+        tr("sys_core", lang),
+        f"\U0001f4f1 {wa}",
+        tr("sys_interval", lang, m=get_alert_interval() // 60),
+        tr("sys_anm", lang, feeds=feeds_s),
+        tr("sys_chat", lang, n=nloc, a=len(alarms), tz=tzc),
+    ]
+    return "\n".join(lines)
+
 # --- Command router (easy to extend) ---
 COMMANDS = {
     "wx": cmd_wx, "model": cmd_model,
@@ -2252,7 +2344,7 @@ COMMANDS = {
     "set": cmd_set, "units": cmd_units, "soil": cmd_soil, "hist": cmd_hist,
     "air": cmd_air, "aer": cmd_air, "flood": cmd_flood, "inundatii": cmd_flood,
     "lang": cmd_lang, "anm": cmd_anm, "alarm": cmd_alarm, "alarma": cmd_alarm,
-    "interval": cmd_interval,
+    "interval": cmd_interval, "sysstatus": cmd_sysstatus, "status": cmd_sysstatus, "sys": cmd_sysstatus,
     "radar": cmd_radar, "sat": cmd_sat, "satelit": cmd_sat,
     "map": cmd_map, "harta": cmd_map, "mapset": cmd_mapset, "hartaset": cmd_mapset,
     "start": cmd_start, "help": cmd_start,
@@ -2378,6 +2470,7 @@ def main():
         raise SystemExit("Set the TG_BOT_TOKEN environment variable (token from @BotFather).")
     threading.Thread(target=alert_loop, daemon=True).start()
     threading.Thread(target=alarm_loop, daemon=True).start()
+    threading.Thread(target=wa_monitor_loop, daemon=True).start()
     print(f"Bot started. Alert check every {get_alert_interval()}s. Waiting for messages...")
     offset = None
     while True:
