@@ -474,9 +474,16 @@ T = {
     "soil_title": {"en": "soil & moisture", "ro": "sol & umiditate"},
     "soil_time_src": {"en": "time: {t} \u00b7 source: Open-Meteo",
                       "ro": "ora: {t} \u00b7 sursa: Open-Meteo"},
-    "soil_temp0": {"en": "\U0001f321 soil temp 0cm: {v}", "ro": "\U0001f321 temp sol 0cm: {v}"},
-    "soil_airhum": {"en": "\U0001f4a7 air humidity: {v}", "ro": "\U0001f4a7 umiditate aer: {v}"},
-    "soil_moist_h": {"en": "soil moisture (vol. water):", "ro": "umiditate sol (apa vol.):"},
+    "soil_temp0": {"en": "\U0001f321 Soil temp at surface (0 cm): {v}",
+                   "ro": "\U0001f321 Temperatura solului la suprafata (0 cm): {v}"},
+    "soil_airhum": {"en": "\U0001f4a7 Air humidity (2 m): {v}", "ro": "\U0001f4a7 Umiditatea aerului (2 m): {v}"},
+    "soil_moist_h": {"en": "Soil moisture by depth (% water by volume):",
+                     "ro": "Umiditatea solului pe adancimi (% apa din volum):"},
+    "soil_legend": {
+        "en": "Moisture guide: &lt;10% very dry, 10–25% dry, 25–40% good, &gt;40% wet/saturated. "
+              "Depths go from the surface (0–1 cm) down to the root zone (27–81 cm).",
+        "ro": "Ghid umiditate: &lt;10% foarte uscat, 10–25% uscat, 25–40% bun, &gt;40% ud/saturat. "
+              "Adancimile merg de la suprafata (0–1 cm) pana la zona radacinilor (27–81 cm)."},
     # air quality
     "air_usage": {"en": "Usage: <code>air Orsova</code> (city, coordinates, or a saved slot)",
                   "ro": "Utilizare: <code>air Orsova</code> (oras, coordonate sau un slot salvat)"},
@@ -517,6 +524,16 @@ T = {
                      "ro": "Fara date de debit pentru acest punct (nu e langa un rau modelat)."},
     "flood_note": {"en": "⚠️ marks days near the period's peak. GloFAS ~5 km, not a local gauge.",
                    "ro": "⚠️ marcheaza zilele aproape de varf. GloFAS ~5 km, nu o statie locala."},
+    "flood_rising": {"en": "rising ↗", "ro": "in crestere ↗"},
+    "flood_falling": {"en": "falling ↘", "ro": "in scadere ↘"},
+    "flood_steady": {"en": "steady →", "ro": "stabil →"},
+    "flood_summary": {"en": "📈 Trend: <b>{trend}</b> · range <b>{lo}–{hi}</b> m³/s",
+                      "ro": "📈 Tendinta: <b>{trend}</b> · interval <b>{lo}–{hi}</b> m³/s"},
+    "flood_legend": {
+        "en": "River discharge = water volume passing per second (m³/s). Flood risk is "
+              "river-specific — watch a sharp rise vs the usual level, not the raw number.",
+        "ro": "Debitul = volumul de apa ce trece pe secunda (m³/s). Riscul de inundatie e "
+              "specific fiecarui rau — urmareste o crestere brusca fata de nivelul obisnuit, nu cifra in sine."},
     # marine / sea state
     "marine_usage": {"en": "Usage: <code>marine Constanta</code> (a coastal/sea point)",
                      "ro": "Utilizare: <code>marine Constanta</code> (un punct pe mare/coasta)"},
@@ -524,7 +541,7 @@ T = {
     "marine_nodata": {"en": "No marine data — this point isn't at sea (try a coastal location).",
                       "ro": "Fara date marine — punctul nu e pe mare (incearca o locatie pe coasta)."},
     "marine_time_src": {"en": "time: {t} · source: Open-Meteo Marine", "ro": "ora: {t} · sursa: Open-Meteo Marine"},
-    "marine_wave": {"en": "🌊 Waves — total height: <b>{v}</b>", "ro": "🌊 Valuri — inaltime totala: <b>{v}</b>"},
+    "marine_wave": {"en": "🌊 Waves — total height: {v}", "ro": "🌊 Valuri — inaltime totala: {v}"},
     "marine_period": {"en": "⏱ Wave period (time between crests): {v}",
                       "ro": "⏱ Perioada valurilor (timp intre creste): {v}"},
     "marine_swell": {"en": "🌀 Swell (long waves from afar): {v}, period {p}",
@@ -1766,9 +1783,9 @@ def cmd_soil(args, chat_id):
     def val(key, scale=1.0, unit="", dec=0):
         a = h.get(key)
         if not a or idx >= len(a) or a[idx] is None:
-            return "\u2014"
+            return "<b>\u2014</b>"
         v = a[idx] * scale
-        return f"{v:.{dec}f}{unit}"
+        return f"<b>{v:.{dec}f}{unit}</b>"
 
     deg = "\u00b0C"   # avoid a backslash inside the f-string braces (Python <3.12)
     lines = [f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 {tr('soil_title', lang)}",
@@ -1780,7 +1797,8 @@ def cmd_soil(args, chat_id):
              f"  1\u20133cm: {val('soil_moisture_1_to_3cm', 100, '%')}",
              f"  3\u20139cm: {val('soil_moisture_3_to_9cm', 100, '%')}",
              f"  9\u201327cm: {val('soil_moisture_9_to_27cm', 100, '%')}",
-             f"  27\u201381cm: {val('soil_moisture_27_to_81cm', 100, '%')}"]
+             f"  27\u201381cm: {val('soil_moisture_27_to_81cm', 100, '%')}",
+             "\n<i>" + tr("soil_legend", lang) + "</i>"]
     return "\n".join(lines)
 
 # --- Air quality (Open-Meteo Air Quality API) ---
@@ -1820,7 +1838,7 @@ def cmd_air(args, chat_id):
 
     def v(key, unit, dec=0):
         x = cur.get(key)
-        return f"{x:.{dec}f}{unit}" if isinstance(x, (int, float)) else "\u2014"
+        return f"<b>{x:.{dec}f}{unit}</b>" if isinstance(x, (int, float)) else "<b>\u2014</b>"
 
     t = cur.get("time", "")
     lines = [f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 {tr('air_title', lang)}",
@@ -1862,13 +1880,27 @@ def cmd_flood(args, chat_id):
         return tr("flood_nodata", lang)
     vals = [d for d in disch if isinstance(d, (int, float))]
     peak = max(vals) if vals else 0
+    low = min(vals) if vals else 0
     lines = [f"\U0001f30a <b>{loc_label(loc)}</b> — {tr('flood_title', lang)}",
              tr("flood_src", lang) + "\n"]
     for t, d in zip(times, disch):
         ds = f"{d:.1f}" if isinstance(d, (int, float)) else "—"
         mark = " ⚠️" if isinstance(d, (int, float)) and peak > 0 and d >= 0.9 * peak else ""
         lines.append(f"{t[5:]}: <b>{ds}</b> m³/s{mark}")
-    lines.append("\n" + tr("flood_note", lang))
+    # trend over the period + range, for context (flood levels are river-specific)
+    if len(vals) >= 2:
+        change = vals[-1] - vals[0]
+        base = abs(vals[0]) or 1.0
+        if change > 0.1 * base:
+            trend = tr("flood_rising", lang)
+        elif change < -0.1 * base:
+            trend = tr("flood_falling", lang)
+        else:
+            trend = tr("flood_steady", lang)
+        lines.append("\n" + tr("flood_summary", lang,
+                                trend=trend, lo=f"{low:.1f}", hi=f"{peak:.1f}"))
+    lines.append("\n<i>" + tr("flood_legend", lang) + "</i>")
+    lines.append(tr("flood_note", lang))
     return "\n".join(lines)
 
 # --- Marine / sea state (Open-Meteo Marine API) ---
@@ -1904,10 +1936,10 @@ def cmd_marine(args, chat_id):
 
     def num(key, unit, dec=1):
         x = cur.get(key)
-        return f"{x:.{dec}f}{unit}" if isinstance(x, (int, float)) else "—"
+        return f"<b>{x:.{dec}f}{unit}</b>" if isinstance(x, (int, float)) else "<b>—</b>"
 
     wdir = cur.get("wave_direction")
-    wdir_s = f" {compass(wdir)} ({round(wdir)}°)" if wdir is not None else ""
+    wdir_s = f" <b>{compass(wdir)}</b> ({round(wdir)}°)" if wdir is not None else ""
     t = cur.get("time", "")
     lines = [f"\U0001f30a <b>{loc_label(loc)}</b> — {tr('marine_title', lang)}",
              tr("marine_time_src", lang, t=t[-5:] if len(t) >= 5 else "") + "\n",
