@@ -114,6 +114,7 @@ FC_URL = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"  # ERA5 history
 AQI_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"  # air quality
 FLOOD_URL = "https://flood-api.open-meteo.com/v1/flood"            # GloFAS river discharge
+MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"         # waves / sea state
 DAILY_MAX = 16  # Open-Meteo daily forecast horizon
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -482,13 +483,24 @@ T = {
     "air_title": {"en": "air quality", "ro": "calitatea aerului"},
     "air_nodata": {"en": "No air-quality data for this point.", "ro": "Fara date de calitate a aerului pentru acest punct."},
     "air_time_src": {"en": "time: {t} · source: Open-Meteo (CAMS)", "ro": "ora: {t} · sursa: Open-Meteo (CAMS)"},
-    "air_pm25": {"en": "PM2.5: {v}", "ro": "PM2.5: {v}"},
-    "air_pm10": {"en": "PM10: {v}", "ro": "PM10: {v}"},
-    "air_o3": {"en": "Ozone (O₃): {v}", "ro": "Ozon (O₃): {v}"},
-    "air_no2": {"en": "NO₂: {v}", "ro": "NO₂: {v}"},
-    "air_so2": {"en": "SO₂: {v}", "ro": "SO₂: {v}"},
-    "air_co": {"en": "CO: {v}", "ro": "CO: {v}"},
-    "air_uv": {"en": "☀ UV index: {v}", "ro": "☀ Index UV: {v}"},
+    "air_pm25": {"en": "PM2.5 — fine particles, reach deep in the lungs: {v}",
+                 "ro": "PM2.5 — particule fine, patrund adanc in plamani: {v}"},
+    "air_pm10": {"en": "PM10 — coarser dust/particles: {v}",
+                 "ro": "PM10 — praf/particule mai mari: {v}"},
+    "air_o3": {"en": "O₃ ozone — summer smog, irritates airways: {v}",
+               "ro": "O₃ ozon — smog de vara, irita caile respiratorii: {v}"},
+    "air_no2": {"en": "NO₂ — from traffic &amp; combustion: {v}",
+                "ro": "NO₂ — din trafic si ardere: {v}"},
+    "air_so2": {"en": "SO₂ — from burning fuels/industry: {v}",
+                "ro": "SO₂ — din arderea combustibililor/industrie: {v}"},
+    "air_co": {"en": "CO — carbon monoxide: {v}", "ro": "CO — monoxid de carbon: {v}"},
+    "air_uv": {"en": "☀ UV index — sunburn risk (0 low … 11+ extreme): {v}",
+               "ro": "☀ Index UV — risc arsuri solare (0 mic … 11+ extrem): {v}"},
+    "air_legend": {
+        "en": "EAQI = European Air Quality Index (0–20 good … 100+ extremely poor). "
+              "Pollutants in µg/m³ — lower is better.",
+        "ro": "EAQI = Indicele European al Calitatii Aerului (0–20 bun … 100+ extrem de slab). "
+              "Poluantii in µg/m³ — mai mic e mai bine."},
     "aqi_unknown": {"en": "no data", "ro": "fara date"},
     "aqi_good": {"en": "good", "ro": "bun"},
     "aqi_fair": {"en": "fair", "ro": "acceptabil"},
@@ -505,6 +517,24 @@ T = {
                      "ro": "Fara date de debit pentru acest punct (nu e langa un rau modelat)."},
     "flood_note": {"en": "⚠️ marks days near the period's peak. GloFAS ~5 km, not a local gauge.",
                    "ro": "⚠️ marcheaza zilele aproape de varf. GloFAS ~5 km, nu o statie locala."},
+    # marine / sea state
+    "marine_usage": {"en": "Usage: <code>marine Constanta</code> (a coastal/sea point)",
+                     "ro": "Utilizare: <code>marine Constanta</code> (un punct pe mare/coasta)"},
+    "marine_title": {"en": "sea state", "ro": "starea marii"},
+    "marine_nodata": {"en": "No marine data — this point isn't at sea (try a coastal location).",
+                      "ro": "Fara date marine — punctul nu e pe mare (incearca o locatie pe coasta)."},
+    "marine_time_src": {"en": "time: {t} · source: Open-Meteo Marine", "ro": "ora: {t} · sursa: Open-Meteo Marine"},
+    "marine_wave": {"en": "🌊 Waves — total height: <b>{v}</b>", "ro": "🌊 Valuri — inaltime totala: <b>{v}</b>"},
+    "marine_period": {"en": "⏱ Wave period (time between crests): {v}",
+                      "ro": "⏱ Perioada valurilor (timp intre creste): {v}"},
+    "marine_swell": {"en": "🌀 Swell (long waves from afar): {v}, period {p}",
+                     "ro": "🌀 Hula (valuri lungi din larg): {v}, perioada {p}"},
+    "marine_windwave": {"en": "💨 Wind waves (local, from wind): {v}",
+                        "ro": "💨 Valuri de vant (locale, din vant): {v}"},
+    "marine_sst": {"en": "🌡 Sea surface temperature: {v}", "ro": "🌡 Temperatura apei la suprafata: {v}"},
+    "marine_legend": {
+        "en": "Wave height in metres; period in seconds (bigger = longer, more powerful swell).",
+        "ro": "Inaltimea valurilor in metri; perioada in secunde (mai mare = hula mai lunga si puternica)."},
     # hist
     "hist_usage": {
         "en": ("Usage: <code>hist Orsova 2025-07-01 2025-07-10</code>\n"
@@ -1802,7 +1832,8 @@ def cmd_air(args, chat_id):
              tr("air_no2", lang, v=v("nitrogen_dioxide", " \u00b5g/m\u00b3")),
              tr("air_so2", lang, v=v("sulphur_dioxide", " \u00b5g/m\u00b3")),
              tr("air_co", lang, v=v("carbon_monoxide", " \u00b5g/m\u00b3")),
-             tr("air_uv", lang, v=v("uv_index", "", 1))]
+             tr("air_uv", lang, v=v("uv_index", "", 1)),
+             "\n<i>" + tr("air_legend", lang) + "</i>"]
     return "\n".join(lines)
 
 # --- Flood / river discharge (Open-Meteo Flood API, GloFAS) ---
@@ -1838,6 +1869,55 @@ def cmd_flood(args, chat_id):
         mark = " ⚠️" if isinstance(d, (int, float)) and peak > 0 and d >= 0.9 * peak else ""
         lines.append(f"{t[5:]}: <b>{ds}</b> m³/s{mark}")
     lines.append("\n" + tr("flood_note", lang))
+    return "\n".join(lines)
+
+# --- Marine / sea state (Open-Meteo Marine API) ---
+_COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+
+def compass(deg):
+    if deg is None:
+        return ""
+    return _COMPASS[int((float(deg) % 360) / 45.0 + 0.5) % 8]
+
+def cmd_marine(args, chat_id):
+    lang = get_lang(chat_id)
+    if not args:
+        return tr("marine_usage", lang)
+    loc, err = find_location(" ".join(args), chat_id, lang)
+    if err:
+        return err
+    params = {
+        "latitude": loc["lat"], "longitude": loc["lon"], "timezone": "auto",
+        "current": "wave_height,wave_direction,wave_period,wind_wave_height,"
+                   "swell_wave_height,swell_wave_period,sea_surface_temperature",
+    }
+    try:
+        r = requests.get(MARINE_URL, params=params, timeout=15)
+        r.raise_for_status()
+        cur = r.json().get("current", {})
+    except (requests.RequestException, ValueError):
+        return tr("marine_nodata", lang)
+    # Inland points return all-null -> tell the user it's not a sea location.
+    keys = ("wave_height", "wind_wave_height", "swell_wave_height", "sea_surface_temperature")
+    if not cur or all(cur.get(k) is None for k in keys):
+        return tr("marine_nodata", lang)
+
+    def num(key, unit, dec=1):
+        x = cur.get(key)
+        return f"{x:.{dec}f}{unit}" if isinstance(x, (int, float)) else "—"
+
+    wdir = cur.get("wave_direction")
+    wdir_s = f" {compass(wdir)} ({round(wdir)}°)" if wdir is not None else ""
+    t = cur.get("time", "")
+    lines = [f"\U0001f30a <b>{loc_label(loc)}</b> — {tr('marine_title', lang)}",
+             tr("marine_time_src", lang, t=t[-5:] if len(t) >= 5 else "") + "\n",
+             tr("marine_wave", lang, v=num("wave_height", " m")) + wdir_s,
+             tr("marine_period", lang, v=num("wave_period", " s", 0)),
+             tr("marine_swell", lang, v=num("swell_wave_height", " m"),
+                p=num("swell_wave_period", " s", 0)),
+             tr("marine_windwave", lang, v=num("wind_wave_height", " m")),
+             tr("marine_sst", lang, v=num("sea_surface_temperature", "°C")),
+             "\n<i>" + tr("marine_legend", lang) + "</i>"]
     return "\n".join(lines)
 
 def cmd_hist(args, chat_id):
@@ -1922,6 +2002,7 @@ HELP = {
         "<code>soil Orsova</code> \u2014 soil moisture + temperature now\n"
         "<code>air Orsova</code> \u2014 air quality (European AQI + pollutants)\n"
         "<code>flood Orsova</code> \u2014 river discharge forecast (GloFAS)\n"
+        "<code>marine Constanta</code> \u2014 sea state: waves, swell, water temp\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 past weather for a period\n\n"
         "<b>Maps</b>\n"
         "<code>radar</code> \u2014 national radar (ANM) over a faded map\n"
@@ -1970,6 +2051,7 @@ HELP = {
         "<code>soil Orsova</code> \u2014 umiditatea solului + temperatura acum\n"
         "<code>air Orsova</code> \u2014 calitatea aerului (AQI european + poluanti)\n"
         "<code>flood Orsova</code> \u2014 prognoza debit rau (GloFAS)\n"
+        "<code>marine Constanta</code> \u2014 starea marii: valuri, hula, temp apa\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 vremea din trecut pe o perioada\n\n"
         "<b>Harti</b>\n"
         "<code>radar</code> \u2014 radar national (ANM) peste harta estompata\n"
@@ -2415,6 +2497,7 @@ COMMANDS = {
     "save": cmd_save, "locs": cmd_locs, "del": cmd_del, "alerts": cmd_alerts,
     "set": cmd_set, "units": cmd_units, "soil": cmd_soil, "hist": cmd_hist,
     "air": cmd_air, "aer": cmd_air, "flood": cmd_flood, "inundatii": cmd_flood,
+    "marine": cmd_marine, "mare": cmd_marine,
     "lang": cmd_lang, "anm": cmd_anm, "alarm": cmd_alarm, "alarma": cmd_alarm,
     "interval": cmd_interval, "sysstatus": cmd_sysstatus, "status": cmd_sysstatus, "sys": cmd_sysstatus,
     "restartsys": cmd_restartsys, "restart": cmd_restartsys,
