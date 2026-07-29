@@ -591,6 +591,26 @@ T = {
     "map_src": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_radar": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_anm": {"en": "source: meteoromania.ro (ANM), \u00a9 OpenStreetMap", "ro": "sursa: meteoromania.ro (ANM), \u00a9 OpenStreetMap"},
+    "radar_legend": {
+        "en": ("<b>Colour legend</b> (precipitation intensity):\n"
+               "\U0001f535 blue/cyan \u2014 light rain (drizzle)\n"
+               "\U0001f7e2 green \u2014 moderate rain\n"
+               "\U0001f7e1 yellow \u2014 heavy rain\n"
+               "\U0001f7e0 orange \u2014 very heavy, downpour\n"
+               "\U0001f534 red \u2014 torrential, possible hail\n"
+               "\U0001f7e3 magenta/white \u2014 extreme, hail / storm core\n"
+               "<i>Colour = how much water the radar sees, not how long it lasts. "
+               "Blank areas = no precipitation (or outside radar range).</i>"),
+        "ro": ("<b>Legenda culorilor</b> (intensitatea precipitatiilor):\n"
+               "\U0001f535 albastru/cyan \u2014 ploaie slaba (burnita)\n"
+               "\U0001f7e2 verde \u2014 ploaie moderata\n"
+               "\U0001f7e1 galben \u2014 ploaie puternica\n"
+               "\U0001f7e0 portocaliu \u2014 foarte puternica, aversa\n"
+               "\U0001f534 rosu \u2014 torentiala, posibil grindina\n"
+               "\U0001f7e3 magenta/alb \u2014 extrema, grindina / nucleu de furtuna\n"
+               "<i>Culoarea = cata apa vede radarul, nu cat dureaza. "
+               "Zonele goale = fara precipitatii (sau in afara razei radarului).</i>"),
+    },
     "map_src_clouds": {"en": "source: Open-Meteo, \u00a9 OpenStreetMap", "ro": "sursa: Open-Meteo, \u00a9 OpenStreetMap"},
     "map_src_both": {"en": "source: Open-Meteo + RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: Open-Meteo + RainViewer, \u00a9 OpenStreetMap"},
     "map_nopil": {"en": "Image maps need Pillow: <code>pip install pillow</code>",
@@ -2157,7 +2177,7 @@ def cmd_anm(args, chat_id):
     set_anm_feeds(chat_id, feeds)
     return tr("anm_set", lang, feeds=", ".join(feeds))
 
-def _map_cmd(args, chat_id, layers, label_key, src_key="map_src"):
+def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=None):
     lang = get_lang(chat_id)
     if not _PIL:
         return tr("map_nopil", lang)
@@ -2177,6 +2197,8 @@ def _map_cmd(args, chat_id, layers, label_key, src_key="map_src"):
         return tr("map_nodata", lang)
     cap = f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 {tr(label_key, lang)}"
     cap += ("\n" + (f"{tlabel} \u00b7 " if tlabel else "") + tr(src_key, lang))
+    if legend_key:
+        cap += "\n\n" + tr(legend_key, lang)
     return Photo(png, cap)
 
 def cmd_radar(args, chat_id):
@@ -2186,7 +2208,8 @@ def cmd_radar(args, chat_id):
     cfg = get_map_cfg(chat_id)
     if cfg["radar_src"] == "rainviewer":
         # RainViewer radar over a faded OSM base, centered on the given location.
-        return _map_cmd(args, chat_id, ["radar"], "cap_radar", src_key="map_src_radar")
+        return _map_cmd(args, chat_id, ["radar"], "cap_radar",
+                        src_key="map_src_radar", legend_key="radar_legend")
     # ANM national radar (in-country radars); optional location just drops a marker.
     mlat = mlon = None
     if args:
@@ -2203,6 +2226,7 @@ def cmd_radar(args, chat_id):
         return tr("map_nodata", lang)
     cap = f"\U0001f4e1 <b>{tr('cap_radar', lang)}</b>"
     cap += "\n" + (f"{tlabel} · " if tlabel else "") + tr("map_src_anm", lang)
+    cap += "\n\n" + tr("radar_legend", lang)
     return Photo(png, cap)
 
 def cmd_sat(args, chat_id):
@@ -2210,7 +2234,8 @@ def cmd_sat(args, chat_id):
     return _map_cmd(args, chat_id, ["clouds"], "cap_sat", src_key="map_src_clouds")
 
 def cmd_map(args, chat_id):
-    return _map_cmd(args, chat_id, ["clouds", "radar"], "cap_map", src_key="map_src_both")
+    return _map_cmd(args, chat_id, ["clouds", "radar"], "cap_map",
+                    src_key="map_src_both", legend_key="radar_legend")
 
 def cmd_mapset(args, chat_id):
     """User-editable map settings: radar source, base fade, cloud colour/opacity, zoom."""
