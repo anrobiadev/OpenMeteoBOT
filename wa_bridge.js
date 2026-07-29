@@ -138,7 +138,10 @@ async function handleUpsert({ messages, type }) {
       const text = m.message.conversation ||
                    (m.message.extendedTextMessage && m.message.extendedTextMessage.text) || '';
       const allowed = !ALLOWED.length || ALLOWED.includes(number);
-      console.log(`[in] from=${number} allowed=${allowed} text=${JSON.stringify(text)}`);
+      const logText = /^\/?(restartsys|restart)\s+\S/i.test(text)
+        ? text.trim().split(/\s+/)[0] + ' ***'    // hide the system password in logs
+        : text;
+      console.log(`[in] from=${number} allowed=${allowed} text=${JSON.stringify(logText)}`);
       if (!allowed) continue;
       if (!text.trim()) continue;
       try {

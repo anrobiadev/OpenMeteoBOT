@@ -87,9 +87,8 @@ except Exception:
 from datetime import datetime, timezone, timedelta
 
 # --- Config ---
-# >>> restartsys password: change this (or set TG_RESTART_PASSWORD in meteobot.env).
-RESTART_PASSWORD = os.environ.get("TG_RESTART_PASSWORD", "admin")
-# systemd units restarted by `restartsys` (must match the sudoers NOPASSWD line).
+# systemd units restarted by `restartsys` (uses your SYSTEM password via sudo -S,
+# so nothing is stored and no sudoers editing is needed).
 RESTART_UNITS = os.environ.get("TG_RESTART_UNITS",
                                "meteobot.service wa-server.service wa-bridge.service")
 
@@ -616,9 +615,10 @@ T = {
     "sys_anm": {"en": "🇷🇴 ANM warnings: <b>{feeds}</b>", "ro": "🇷🇴 Avertizari ANM: <b>{feeds}</b>"},
     "sys_chat": {"en": "📍 Saved: <b>{n}</b> · ⏰ alarms: <b>{a}</b> · 🕒 map tz: <b>{tz}</b>",
                  "ro": "📍 Salvate: <b>{n}</b> · ⏰ alarme: <b>{a}</b> · 🕒 fus harti: <b>{tz}</b>"},
-    "restart_usage": {"en": "Usage: <code>restartsys &lt;password&gt;</code>",
-                      "ro": "Utilizare: <code>restartsys &lt;parola&gt;</code>"},
-    "restart_bad_pw": {"en": "❌ Wrong password.", "ro": "❌ Parola gresita."},
+    "restart_usage": {"en": "Usage: <code>restartsys &lt;your system password&gt;</code>",
+                      "ro": "Utilizare: <code>restartsys &lt;parola ta de sistem&gt;</code>"},
+    "restart_bad_pw": {"en": "❌ Wrong system password (or the user has no sudo rights).",
+                       "ro": "❌ Parola de sistem gresita (sau userul nu are drepturi sudo)."},
     "restart_ok": {"en": "🔄 Restarting services now… back in a few seconds.",
                    "ro": "🔄 Repornesc serviciile acum… revin in cateva secunde."},
     "restart_err": {"en": "Restart failed: {e}", "ro": "Repornire esuata: {e}"},
@@ -2353,22 +2353,40 @@ def cmd_sysstatus(args, chat_id):
     return "\n".join(lines)
 
 def cmd_restartsys(args, chat_id):
-    """Restart the systemd services — gated by a password. Detached + --no-block so
-    the command survives restarting its own service. Needs passwordless sudo (see README)."""
+    """Restart the systemd services using the caller's SYSTEM password via `sudo -S`.
+    Nothing is stored; no sudoers change needed (the user just needs sudo rights).
+    The restart runs detached with --no-block so it survives restarting its own service."""
     lang = get_lang(chat_id)
-    pw = " ".join(args).strip()
+    pw = " ".join(args)
     if not pw:
         return tr("restart_usage", lang)
-    if pw != RESTART_PASSWORD:
-        return tr("restart_bad_pw", lang)
-    cmd = f"sleep 3; sudo -n systemctl restart --no-block {RESTART_UNITS}"
+    # 1) validate the system password so we can give real feedback (-k ignores any cache)
     try:
-        subprocess.Popen(["sh", "-c", cmd], start_new_session=True,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        chk = subprocess.run(["sudo", "-S", "-k", "true"], input=pw + "\n",
+                             capture_output=True, text=True, timeout=15)
+    except Exception as e:
+        return tr("restart_err", lang, e=e)
+    if chk.returncode != 0:
+        return tr("restart_bad_pw", lang)
+    # 2) launch the restart detached; password fed via stdin (never in argv/logs),
+    #    a short delay lets this reply go out before the service is restarted.
+    try:
+        p = subprocess.Popen(
+            ["sh", "-c", f"sleep 3; exec sudo -S -k systemctl restart --no-block {RESTART_UNITS}"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, text=True)
+        p.stdin.write(pw + "\n"); p.stdin.flush(); p.stdin.close()
     except Exception as e:
         return tr("restart_err", lang, e=e)
     print(f"[restartsys] triggered by chat {chat_id}: {RESTART_UNITS}")
     return tr("restart_ok", lang)
+
+def redact_log(text):
+    """Hide the password when a restart command is echoed to the logs."""
+    parts = (text or "").lstrip("/").split()
+    if parts and parts[0].lower() in ("restartsys", "restart") and len(parts) > 1:
+        return parts[0] + " ***"
+    return text
 
 # --- Command router (easy to extend) ---
 COMMANDS = {
@@ -2521,7 +2539,7 @@ def main():
                 user_id = msg.get("from", {}).get("id")
                 lang_hint = msg.get("from", {}).get("language_code")
                 text = msg["text"]
-                print(f"[msg] chat_id={chat_id} user_id={user_id}: {text!r}")
+                print(f"[msg] chat_id={chat_id} user_id={user_id}: {redact_log(text)!r}")
                 if not is_allowed(user_id, chat_id):
                     continue
                 reply = handle_text(text, chat_id, lang_hint)
