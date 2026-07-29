@@ -80,7 +80,7 @@ import threading
 import requests
 from io import BytesIO
 try:
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFont
     _PIL = True
 except Exception:
     _PIL = False
@@ -591,6 +591,10 @@ T = {
     "map_src": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_radar": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_anm": {"en": "source: meteoromania.ro (ANM), \u00a9 OpenStreetMap", "ro": "sursa: meteoromania.ro (ANM), \u00a9 OpenStreetMap"},
+    "rv_bar_title": {"en": "Precipitation intensity (indicative)",
+                     "ro": "Intensitatea precipitatiilor (orientativ)"},
+    "rv_bar_left": {"en": "light", "ro": "slaba"},
+    "rv_bar_right": {"en": "extreme / hail", "ro": "extrema / grindina"},
     "radar_legend_anm": {
         "en": ("<b>Colour scale</b> (bottom of the image) — ANM's own reflectivity scale in "
                "<b>dBZ</b>: blue/green = light–moderate rain, yellow/orange = heavy, "
@@ -600,24 +604,14 @@ T = {
                "rosu/magenta = torentiala, posibil grindina. Gol = fara ecou."),
     },
     "radar_legend": {
-        "en": ("<b>Colour legend</b> (precipitation intensity):\n"
-               "\U0001f535 blue/cyan \u2014 light rain (drizzle)\n"
-               "\U0001f7e2 green \u2014 moderate rain\n"
-               "\U0001f7e1 yellow \u2014 heavy rain\n"
-               "\U0001f7e0 orange \u2014 very heavy, downpour\n"
-               "\U0001f534 red \u2014 torrential, possible hail\n"
-               "\U0001f7e3 magenta/white \u2014 extreme, hail / storm core\n"
-               "<i>Colour = how much water the radar sees, not how long it lasts. "
-               "Blank areas = no precipitation (or outside radar range).</i>"),
-        "ro": ("<b>Legenda culorilor</b> (intensitatea precipitatiilor):\n"
-               "\U0001f535 albastru/cyan \u2014 ploaie slaba (burnita)\n"
-               "\U0001f7e2 verde \u2014 ploaie moderata\n"
-               "\U0001f7e1 galben \u2014 ploaie puternica\n"
-               "\U0001f7e0 portocaliu \u2014 foarte puternica, aversa\n"
-               "\U0001f534 rosu \u2014 torentiala, posibil grindina\n"
-               "\U0001f7e3 magenta/alb \u2014 extrema, grindina / nucleu de furtuna\n"
-               "<i>Culoarea = cata apa vede radarul, nu cat dureaza. "
-               "Zonele goale = fara precipitatii (sau in afara razei radarului).</i>"),
+        "en": ("<b>Colour bar</b> (bottom of the image): blue/green = light\u2013moderate rain, "
+               "yellow/orange = heavy, red/magenta = extreme, possible hail. Blank = no echo.\n"
+               "<i>RainViewer publishes no official scale, so this bar is indicative \u2014 it shows "
+               "the intensity order, not exact thresholds.</i>"),
+        "ro": ("<b>Bara de culori</b> (jos in imagine): albastru/verde = ploaie slaba\u2013moderata, "
+               "galben/portocaliu = puternica, rosu/magenta = extrema, posibil grindina. Gol = fara ecou.\n"
+               "<i>RainViewer nu publica o scara oficiala, deci bara este orientativa \u2014 arata "
+               "ordinea intensitatii, nu praguri exacte.</i>"),
     },
     "map_src_clouds": {"en": "source: Open-Meteo, \u00a9 OpenStreetMap", "ro": "sursa: Open-Meteo, \u00a9 OpenStreetMap"},
     "map_src_both": {"en": "source: Open-Meteo + RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: Open-Meteo + RainViewer, \u00a9 OpenStreetMap"},
@@ -1403,8 +1397,66 @@ def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None):
     overlay = grid.resize((w, h), Image.BICUBIC)                 # smooth field
     return overlay, tstamp                                       # ISO time (UTC) or ''
 
+# --- Generated legend bar for the RainViewer radar (no official scale image) -----
+# RainViewer doesn't publish a scale image, so we draw our own bar and label it as
+# indicative: colours go light -> extreme, matching the tile palette's progression.
+RV_LEGEND_COLORS = [
+    (0, 150, 255), (0, 210, 255), (0, 200, 90), (120, 220, 60),
+    (255, 235, 0), (255, 165, 0), (235, 40, 40), (190, 30, 190),
+]
+
+def _load_font(size):
+    for path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"):
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    try:
+        return ImageFont.load_default()
+    except Exception:
+        return None
+
+def _legend_bar(width, left_label, right_label, title, colors=None, height=22):
+    """Horizontal colour bar with a title and end labels. Returns an RGBA image."""
+    colors = colors or RV_LEGEND_COLORS
+    pad = 10
+    font = _load_font(13)
+    title_h = 18 if title else 0
+    img = Image.new("RGBA", (width, title_h + height + 20 + pad), (255, 255, 255, 255))
+    d = ImageDraw.Draw(img)
+    if title:
+        d.text((pad, 2), title, fill=(30, 30, 30, 255), font=font)
+    bar_w = width - 2 * pad
+    seg = bar_w / float(len(colors))
+    y0 = title_h + 2
+    for i, c in enumerate(colors):                      # solid segments = readable steps
+        x0 = pad + int(round(i * seg))
+        x1 = pad + int(round((i + 1) * seg))
+        d.rectangle([x0, y0, x1, y0 + height], fill=c + (255,))
+    d.rectangle([pad, y0, pad + bar_w, y0 + height], outline=(90, 90, 90, 255), width=1)
+    ty = y0 + height + 3
+    d.text((pad, ty), left_label, fill=(40, 40, 40, 255), font=font)
+    try:
+        tw = d.textlength(right_label, font=font)
+    except Exception:
+        tw = 7 * len(right_label)
+    d.text((pad + bar_w - tw, ty), right_label, fill=(40, 40, 40, 255), font=font)
+    return img
+
+def _stack_below(base, strip):
+    """Return base with `strip` appended underneath (same width)."""
+    bw, bh = base.size
+    if strip.size[0] != bw:
+        strip = strip.resize((bw, max(1, int(strip.size[1] * bw / float(strip.size[0])))),
+                             Image.LANCZOS)
+    out = Image.new("RGBA", (bw, bh + strip.size[1]), (255, 255, 255, 255))
+    out.paste(base, (0, 0))
+    out.alpha_composite(strip, (0, bh))
+    return out
+
 def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
-              cloud_rgb=None, cloud_alpha=None, tz=None):
+              cloud_rgb=None, cloud_alpha=None, tz=None, legend=None):
     """Stitch OSM base + weather overlays, centered on the point, with a marker.
     `layers` items: 'radar'/'satellite' (RainViewer tiles) or 'clouds' (Open-Meteo).
     `base_dim` (0..1) washes out the OSM base so weather stands out.
@@ -1476,6 +1528,13 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
     mx, my = w // 2, h // 2
     d.ellipse([mx - 7, my - 7, mx + 7, my + 7], outline=(255, 0, 0, 255), width=3)
     d.ellipse([mx - 2, my - 2, mx + 2, my + 2], fill=(255, 0, 0, 255))
+
+    if legend and "radar" in layers:      # generated bar (RainViewer has no scale image)
+        try:
+            canvas = _stack_below(canvas, _legend_bar(
+                w, legend.get("left", ""), legend.get("right", ""), legend.get("title", "")))
+        except Exception:
+            pass                          # never fail the map because of the legend
 
     buf = BytesIO()
     canvas.convert("RGB").save(buf, format="PNG")
@@ -2234,10 +2293,13 @@ def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=Non
     if err:
         return err
     cfg = get_map_cfg(chat_id)
+    bar = {"title": tr("rv_bar_title", lang), "left": tr("rv_bar_left", lang),
+           "right": tr("rv_bar_right", lang)} if "radar" in layers else None
     try:
         png, tlabel = build_map(loc["lat"], loc["lon"], layers, z=cfg["zoom"],
                                 base_dim=cfg["base_dim"], cloud_rgb=tuple(cfg["cloud_rgb"]),
-                                cloud_alpha=cfg["cloud_alpha"], tz=cfg.get("tz", ""))
+                                cloud_alpha=cfg["cloud_alpha"], tz=cfg.get("tz", ""),
+                                legend=bar)
     except Exception as e:
         return tr("err_generic", lang, e=e)
     if not png:

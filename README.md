@@ -459,8 +459,11 @@ resent on every cycle.
   location (`radar Orsova`) to drop a marker. Needs Pillow.
   **ANM's official colour scale** (reflectivity in dBZ) is fetched from their radar
   page and drawn under the map, so the colours match the source exactly. Disable
-  with `TG_ANM_SCALE=0`; the RainViewer source instead gets a text colour legend
-  in the caption.
+  with `TG_ANM_SCALE=0`.
+- **Colour bars.** ANM images carry ANM's own scale. RainViewer publishes no scale
+  image, so `map` (and `radar` with the RainViewer source) get a **generated bar**
+  drawn under the image, labelled *indicative* — it shows the intensity order
+  (light → extreme), not exact thresholds.
 - **`sat Orsova`** shows **cloud cover** from Open-Meteo (grey = cloudier). The
   free RainViewer tier has no satellite, so cloud cover is used instead.
 - **`map Orsova`** overlays clouds + radar on one image.
