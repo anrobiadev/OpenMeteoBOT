@@ -617,8 +617,12 @@ T = {
                  "ro": "📍 Salvate: <b>{n}</b> · ⏰ alarme: <b>{a}</b> · 🕒 fus harti: <b>{tz}</b>"},
     "restart_usage": {"en": "Usage: <code>restartsys &lt;your system password&gt;</code>",
                       "ro": "Utilizare: <code>restartsys &lt;parola ta de sistem&gt;</code>"},
-    "restart_bad_pw": {"en": "❌ Wrong system password (or the user has no sudo rights).",
-                       "ro": "❌ Parola de sistem gresita (sau userul nu are drepturi sudo)."},
+    "restart_bad_pw": {"en": "❌ Wrong password.", "ro": "❌ Parola gresita."},
+    "restart_no_verify": {
+        "en": "⚠️ Can't verify the password (PAM not installed). Restart aborted for safety. "
+              "Run <code>pip install python-pam</code>, or set <code>TG_RESTART_PASSWORD</code> in meteobot.env.",
+        "ro": "⚠️ Nu pot verifica parola (PAM neinstalat). Repornire anulata pentru siguranta. "
+              "Ruleaza <code>pip install python-pam</code>, sau seteaza <code>TG_RESTART_PASSWORD</code> in meteobot.env."},
     "restart_ok": {"en": "🔄 Restarting services now… back in a few seconds.",
                    "ro": "🔄 Repornesc serviciile acum… revin in cateva secunde."},
     "restart_err": {"en": "Restart failed: {e}", "ro": "Repornire esuata: {e}"},
@@ -2352,27 +2356,44 @@ def cmd_sysstatus(args, chat_id):
     ]
     return "\n".join(lines)
 
+def _verify_system_password(pw):
+    """True/False if `pw` is the bot user's system password (checked via PAM, so it
+    works even when sudo is passwordless). None if PAM isn't available to verify."""
+    try:
+        import pam
+        import pwd
+    except ImportError:
+        return None
+    try:
+        user = pwd.getpwuid(os.getuid()).pw_name
+        return bool(pam.pam().authenticate(user, pw))
+    except Exception:
+        return None
+
 def cmd_restartsys(args, chat_id):
-    """Restart the systemd services using the caller's SYSTEM password via `sudo -S`.
-    Nothing is stored; no sudoers change needed (the user just needs sudo rights).
-    The restart runs detached with --no-block so it survives restarting its own service."""
+    """Restart the systemd services. The password is checked (dedicated
+    TG_RESTART_PASSWORD if set, otherwise the system password via PAM). Fails CLOSED:
+    it never restarts unless the password was actually verified. Detached + --no-block
+    so it survives restarting its own service."""
     lang = get_lang(chat_id)
     pw = " ".join(args)
     if not pw:
         return tr("restart_usage", lang)
-    # 1) validate the system password so we can give real feedback (-k ignores any cache)
-    try:
-        chk = subprocess.run(["sudo", "-S", "-k", "true"], input=pw + "\n",
-                             capture_output=True, text=True, timeout=15)
-    except Exception as e:
-        return tr("restart_err", lang, e=e)
-    if chk.returncode != 0:
-        return tr("restart_bad_pw", lang)
-    # 2) launch the restart detached; password fed via stdin (never in argv/logs),
-    #    a short delay lets this reply go out before the service is restarted.
+    dedicated = os.environ.get("TG_RESTART_PASSWORD", "")
+    if dedicated:
+        if pw != dedicated:
+            return tr("restart_bad_pw", lang)
+    else:
+        ok = _verify_system_password(pw)
+        if ok is None:                       # cannot verify -> refuse (no open gate)
+            return tr("restart_no_verify", lang)
+        if not ok:
+            return tr("restart_bad_pw", lang)
+    # Launch detached; feed pw to sudo -S (used only if sudo actually needs it),
+    # short delay so this reply is delivered before the service restarts.
     try:
         p = subprocess.Popen(
-            ["sh", "-c", f"sleep 3; exec sudo -S -k systemctl restart --no-block {RESTART_UNITS}"],
+            ["sh", "-c", f"sleep 3; exec sudo -S systemctl restart --no-block {RESTART_UNITS}"],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True, text=True)
         p.stdin.write(pw + "\n"); p.stdin.flush(); p.stdin.close()

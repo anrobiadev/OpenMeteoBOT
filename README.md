@@ -494,13 +494,29 @@ resent on every cycle.
 `git pull`. It survives restarting its own service (runs detached with
 `--no-block`).
 
-- **No stored password, no sudoers editing.** It uses your **system password** via
-  `sudo -S`: the bot pipes the password you type into `sudo`, which authenticates
-  it normally. Nothing is saved anywhere. The only requirement is that the bot's
-  user can already run `sudo` (which it can, since you installed with `sudo`).
-- The password is validated first, so a wrong one just replies "wrong password"
-  and restarts nothing.
-- Restart the units via `TG_RESTART_UNITS` if your service names differ.
+- **How the password is checked.** It **fails closed** — it never restarts unless
+  the password is actually verified. Two modes:
+  - **System password (nothing stored):** verified via **PAM**, so it works even
+    when `sudo` is passwordless (common on Raspberry Pi, where `sudo` would
+    otherwise accept any password). Install it once:
+
+    ```bash
+    pip install python-pam --break-system-packages
+    ```
+
+    Without it, `restartsys` refuses to run (it will not restart on an unverified
+    password) and tells you to install PAM or set a dedicated password.
+  - **Dedicated password (no PAM needed):** set one in `meteobot.env` (same folder,
+    no `/etc` editing):
+
+    ```bash
+    echo 'TG_RESTART_PASSWORD=your-secret' >> ~/OpenMeteoBOT/meteobot.env
+    ```
+
+    If set, this takes precedence and the system password isn't used.
+- Restart the units via `TG_RESTART_UNITS` if your service names differ. The actual
+  restart uses your existing `sudo` (passwordless on most Pis; otherwise the typed
+  password is piped to `sudo -S`).
 
 > ⚠️ **Security:** the password travels inside a chat message (Telegram/WhatsApp).
 > The bot redacts it from its own logs, but this is your **root-capable system
@@ -550,7 +566,8 @@ warning text and color come straight from ANM.
 | `TG_ADMIN_CHAT` | meteo_bot | first allowed user | Telegram chat that gets WhatsApp-down alerts |
 | `WA_STATUS_FILE` | both | `wa_status.json` | WhatsApp heartbeat file (bridge writes, bot reads) |
 | `WA_HEARTBEAT_STALE` | meteo_bot | `300` | Seconds without heartbeat before "bridge down" alert |
-| `TG_RESTART_UNITS` | meteo_bot | the 3 services | systemd units `restartsys` restarts (uses your system password via sudo) |
+| `TG_RESTART_PASSWORD` | meteo_bot | unset | Optional dedicated password for `restartsys` (else the system password via PAM) |
+| `TG_RESTART_UNITS` | meteo_bot | the 3 services | systemd units `restartsys` restarts |
 | `TG_BOT_STATE` | both Python | `bot_state.json` | State file |
 | `TG_ALERT_INTERVAL` | both Python | `900` | Alert check interval (seconds; 900 = 15 min) |
 | `TG_ANM` | both Python | `1` | ANM official warnings on/off globally (`0` = off) |
