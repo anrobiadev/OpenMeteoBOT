@@ -460,10 +460,11 @@ resent on every cycle.
   **ANM's official colour scale** (reflectivity in dBZ) is fetched from their radar
   page and drawn under the map, so the colours match the source exactly. Disable
   with `TG_ANM_SCALE=0`.
-- **Colour bars.** ANM images carry ANM's own scale. RainViewer publishes no scale
-  image, so `map` (and `radar` with the RainViewer source) get a **generated bar**
-  drawn under the image, labelled *indicative* — it shows the intensity order
-  (light → extreme), not exact thresholds.
+- **Colour scales — official for both sources.** ANM images carry ANM's own dBZ
+  scale image. For RainViewer, the bar drawn under `map` (and `radar` with the
+  RainViewer source) is built from RainViewer's **published colour table**
+  ("Universal Blue", scheme 2) and labelled with real **dBZ** values, so the bar
+  matches the tiles exactly.
 - **`sat Orsova`** shows **cloud cover** from Open-Meteo (grey = cloudier). The
   free RainViewer tier has no satellite, so cloud cover is used instead.
 - **`map Orsova`** overlays clouds + radar on one image.
@@ -590,6 +591,7 @@ warning text and color come straight from ANM.
 | `TG_ANM_MAP_W` | meteo_bot | `1000` | ANM radar output width (px) |
 | `TG_ANM_SCALE` | meteo_bot | `1` | Draw ANM's official dBZ colour scale under the radar map (`0` = off) |
 | `TG_ANM_SCALE_URL` | meteo_bot | ANM `sclrZ.png` | URL of ANM's colour-scale image |
+| `TG_RV_COLOR` | meteo_bot | `2` | RainViewer colour scheme (2 = Universal Blue, the only one the public API serves) |
 | `TG_ANM_RADAR_URL` | meteo_bot | meteoromania.ro URL | ANM radar image URL template |
 | `TG_ANM_RADAR_OFFSET` / `TG_ANM_RADAR_LOOKBACK` | meteo_bot | `1` / `9` | ANM radar timestamp probing (minute offset / slots back) |
 | `PY_PORT` | wa_server | `5000` | Python service port |

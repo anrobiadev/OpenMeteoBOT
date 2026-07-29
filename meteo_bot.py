@@ -591,9 +591,9 @@ T = {
     "map_src": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_radar": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_anm": {"en": "source: meteoromania.ro (ANM), \u00a9 OpenStreetMap", "ro": "sursa: meteoromania.ro (ANM), \u00a9 OpenStreetMap"},
-    "rv_bar_title": {"en": "Precipitation intensity (indicative)",
-                     "ro": "Intensitatea precipitatiilor (orientativ)"},
-    "rv_bar_left": {"en": "light", "ro": "slaba"},
+    "rv_bar_title": {"en": "Radar reflectivity dBZ — RainViewer (Universal Blue)",
+                     "ro": "Reflectivitate radar dBZ — RainViewer (Universal Blue)"},
+    "rv_bar_left": {"en": "light rain", "ro": "ploaie slaba"},
     "rv_bar_right": {"en": "extreme / hail", "ro": "extrema / grindina"},
     "radar_legend_anm": {
         "en": ("<b>Colour scale</b> (bottom of the image) — ANM's own reflectivity scale in "
@@ -604,14 +604,14 @@ T = {
                "rosu/magenta = torentiala, posibil grindina. Gol = fara ecou."),
     },
     "radar_legend": {
-        "en": ("<b>Colour bar</b> (bottom of the image): blue/green = light\u2013moderate rain, "
-               "yellow/orange = heavy, red/magenta = extreme, possible hail. Blank = no echo.\n"
-               "<i>RainViewer publishes no official scale, so this bar is indicative \u2014 it shows "
-               "the intensity order, not exact thresholds.</i>"),
-        "ro": ("<b>Bara de culori</b> (jos in imagine): albastru/verde = ploaie slaba\u2013moderata, "
-               "galben/portocaliu = puternica, rosu/magenta = extrema, posibil grindina. Gol = fara ecou.\n"
-               "<i>RainViewer nu publica o scara oficiala, deci bara este orientativa \u2014 arata "
-               "ordinea intensitatii, nu praguri exacte.</i>"),
+        "en": ("<b>Colour scale</b> (bottom of the image) \u2014 RainViewer's official "
+               "<b>Universal Blue</b> scale, in <b>dBZ</b> (radar reflectivity):\n"
+               "blue ~15\u201334 light to moderate rain \u00b7 yellow/orange ~35\u201344 heavy \u00b7 "
+               "red ~45\u201354 very heavy \u00b7 magenta/white 55+ extreme, hail likely. Blank = no echo."),
+        "ro": ("<b>Scara de culori</b> (jos in imagine) \u2014 scara oficiala RainViewer "
+               "<b>Universal Blue</b>, in <b>dBZ</b> (reflectivitate radar):\n"
+               "albastru ~15\u201334 ploaie slaba spre moderata \u00b7 galben/portocaliu ~35\u201344 puternica \u00b7 "
+               "rosu ~45\u201354 foarte puternica \u00b7 magenta/alb 55+ extrema, probabil grindina. Gol = fara ecou."),
     },
     "map_src_clouds": {"en": "source: Open-Meteo, \u00a9 OpenStreetMap", "ro": "sursa: Open-Meteo, \u00a9 OpenStreetMap"},
     "map_src_both": {"en": "source: Open-Meteo + RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: Open-Meteo + RainViewer, \u00a9 OpenStreetMap"},
@@ -1354,7 +1354,9 @@ def _overlay_url(frames, layer, z, x, y):
     if not path:
         return None
     if layer == "radar":
-        return f"{host}{path}/{TILE}/{z}/{x}/{y}/4/1_1.png"      # color 4, smooth+snow
+        # Colour scheme 2 = "Universal Blue" — the only one the public API offers,
+        # and the one our legend bar is built from. 1_1 = smoothed + snow.
+        return f"{host}{path}/{TILE}/{z}/{x}/{y}/{RV_COLOR_SCHEME}/1_1.png"
     return f"{host}{path}/{TILE}/{z}/{x}/{y}/0/0_0.png"          # satellite
 
 def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None):
@@ -1397,13 +1399,27 @@ def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None):
     overlay = grid.resize((w, h), Image.BICUBIC)                 # smooth field
     return overlay, tstamp                                       # ISO time (UTC) or ''
 
-# --- Generated legend bar for the RainViewer radar (no official scale image) -----
-# RainViewer doesn't publish a scale image, so we draw our own bar and label it as
-# indicative: colours go light -> extreme, matching the tile palette's progression.
-RV_LEGEND_COLORS = [
-    (0, 150, 255), (0, 210, 255), (0, 200, 90), (120, 220, 60),
-    (255, 235, 0), (255, 165, 0), (235, 40, 40), (190, 30, 190),
-]
+# --- Legend bar built from RainViewer's OFFICIAL colour table --------------------
+# Scheme 2 "Universal Blue" (the only one the public API serves), rain colours for
+# dBZ 15..65, taken from rainviewer.com/api/color-schemes.html (colour table CSV).
+RV_COLOR_SCHEME = int(os.environ.get("TG_RV_COLOR", "2"))
+RV_DBZ_MIN, RV_DBZ_MAX = 15, 65
+RV_UNIVERSAL_BLUE = (
+    "88ddee", "6cd1eb", "51c5e8", "36bae5", "1baee2",   # 15-19  light rain
+    "00a3e0", "009ad5", "0091ca", "0088bf", "007fb4",   # 20-24
+    "0077aa", "0070a3", "00699c", "006295", "005b8e",   # 25-29
+    "005588", "005180", "004e78", "004a70", "004768",   # 30-34  moderate
+    "ffee00", "ffe000", "ffd200", "ffc500", "ffb700",   # 35-39  heavy
+    "ffaa00", "ff9f00", "ff9500", "ff8b00", "ff8100",   # 40-44
+    "ff4400", "f23600", "e62800", "d91b00", "cd0d00",   # 45-49  very heavy
+    "c10000", "a80000", "8f0000", "760000", "5d0000",   # 50-54
+    "ffaaff", "ff9fff", "ff95ff", "ff8bff", "ff81ff",   # 55-59  extreme / hail
+    "ff77ff", "ff6cff", "ff62ff", "ff58ff", "ff4eff",   # 60-64
+    "ffffff",                                            # 65+
+)
+
+def _hex_rgb(h):
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 def _load_font(size):
     for path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -1417,31 +1433,45 @@ def _load_font(size):
     except Exception:
         return None
 
-def _legend_bar(width, left_label, right_label, title, colors=None, height=22):
-    """Horizontal colour bar with a title and end labels. Returns an RGBA image."""
-    colors = colors or RV_LEGEND_COLORS
+def _legend_bar(width, left_label, right_label, title, height=24):
+    """RainViewer's official Universal Blue scale, drawn as a dBZ colour bar."""
     pad = 10
     font = _load_font(13)
+    small = _load_font(11)
     title_h = 18 if title else 0
-    img = Image.new("RGBA", (width, title_h + height + 20 + pad), (255, 255, 255, 255))
+    img = Image.new("RGBA", (width, title_h + height + 34), (255, 255, 255, 255))
     d = ImageDraw.Draw(img)
     if title:
         d.text((pad, 2), title, fill=(30, 30, 30, 255), font=font)
     bar_w = width - 2 * pad
-    seg = bar_w / float(len(colors))
+    n = len(RV_UNIVERSAL_BLUE)
+    seg = bar_w / float(n)
     y0 = title_h + 2
-    for i, c in enumerate(colors):                      # solid segments = readable steps
+    for i, hx in enumerate(RV_UNIVERSAL_BLUE):          # one segment per dBZ step
         x0 = pad + int(round(i * seg))
-        x1 = pad + int(round((i + 1) * seg))
-        d.rectangle([x0, y0, x1, y0 + height], fill=c + (255,))
+        x1 = pad + int(round((i + 1) * seg)) + 1
+        d.rectangle([x0, y0, x1, y0 + height], fill=_hex_rgb(hx) + (255,))
     d.rectangle([pad, y0, pad + bar_w, y0 + height], outline=(90, 90, 90, 255), width=1)
-    ty = y0 + height + 3
-    d.text((pad, ty), left_label, fill=(40, 40, 40, 255), font=font)
+
+    ty = y0 + height + 2
+    for dbz in range(RV_DBZ_MIN, RV_DBZ_MAX + 1, 10):   # dBZ ticks: 15,25,...,65
+        frac = (dbz - RV_DBZ_MIN) / float(RV_DBZ_MAX - RV_DBZ_MIN)
+        x = pad + frac * bar_w
+        d.line([x, y0 + height, x, y0 + height + 3], fill=(90, 90, 90, 255), width=1)
+        txt = f"{dbz}"
+        try:
+            tw = d.textlength(txt, font=small)
+        except Exception:
+            tw = 6 * len(txt)
+        d.text((min(max(pad, x - tw / 2), pad + bar_w - tw), ty + 2),
+               txt, fill=(40, 40, 40, 255), font=small)
+    ty2 = ty + 15
+    d.text((pad, ty2), left_label, fill=(40, 40, 40, 255), font=small)
     try:
-        tw = d.textlength(right_label, font=font)
+        tw = d.textlength(right_label, font=small)
     except Exception:
-        tw = 7 * len(right_label)
-    d.text((pad + bar_w - tw, ty), right_label, fill=(40, 40, 40, 255), font=font)
+        tw = 6 * len(right_label)
+    d.text((pad + bar_w - tw, ty2), right_label, fill=(40, 40, 40, 255), font=small)
     return img
 
 def _stack_below(base, strip):
