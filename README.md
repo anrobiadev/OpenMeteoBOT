@@ -499,6 +499,7 @@ warning text and color come straight from ANM.
 | `Cannot find module '@whiskeysockets/baileys'` | `npm install` wasn't run in the right folder. |
 | Bridge loops "Connection closed" | Old Node (<20), or wrong Pi clock (`date`), or delete `wa_auth` and re-scan. |
 | Bot doesn't reply on WhatsApp | You message from the linked number (ignored) — use another number; or `WA_ALLOWED` blocks it. |
+| WhatsApp goes silent after a while (services still "running") | The Baileys socket died silently. The bridge now has a watchdog that probes every ~1 min and auto-reconnects; if it can't (logged out), the log shows `loggedOut` — re-scan the QR. |
 | Bot doesn't reply on Telegram | Two instances on the same token — keep only the service. |
 | Wrong date/time on the Pi | `sudo timedatectl set-ntp true` (needed for the WhatsApp TLS handshake). |
 
@@ -529,6 +530,7 @@ warning text and color come straight from ANM.
 | `WA_PORT` | wa_bridge | `3000` | Node bridge port |
 | `PY_URL` | wa_bridge | `http://127.0.0.1:5000/incoming` | Where incoming messages are sent |
 | `WA_ALLOWED` | wa_bridge | empty | Allowed WhatsApp numbers (empty = anyone) |
+| `WA_STALE_MS` | wa_bridge | `180000` | Idle time (ms) before the watchdog probes/reconnects WhatsApp |
 
 > In our setup we used `WA_PORT=3100` (port 3000 was busy), so `WA_SEND_URL` must be
 > `http://127.0.0.1:3100/send`.

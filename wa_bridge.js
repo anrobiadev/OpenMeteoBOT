@@ -29,43 +29,91 @@ const ALLOWED = (process.env.WA_ALLOWED || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 
 let sock = null;
+let connected = false;
+let starting = false;
+let loggedOut = false;                        // fatal: needs a fresh QR scan
+let lastActivity = Date.now();
+let reconnectTimer = null;
+
+// Idle time after which the watchdog actively probes the socket (ms).
+const STALE_MS = parseInt(process.env.WA_STALE_MS || '180000', 10);   // 3 min
+
+function markActivity() { lastActivity = Date.now(); }
+
+function scheduleReconnect(delay) {
+  if (loggedOut || reconnectTimer) return;
+  reconnectTimer = setTimeout(() => { reconnectTimer = null; start(); }, delay);
+}
 
 async function start() {
-  const { state, saveCreds } = await useMultiFileAuthState('wa_auth');
-  const { version, isLatest } = await fetchLatestBaileysVersion();
-  console.log(`Using WhatsApp Web v${version.join('.')} (latest: ${isLatest})`);
-  sock = makeWASocket({
-    version,                                 // use the CURRENT WA Web protocol
-    auth: state,
-    logger: P({ level: 'silent' }),
-    browser: ['MeteoBot', 'Chrome', '1.0'],
-  });
-  sock.ev.on('creds.update', saveCreds);
+  if (starting || loggedOut) return;
+  starting = true;
+  try {
+    if (sock) { try { sock.end(); } catch (_) {} }   // drop any stale socket first
+    const { state, saveCreds } = await useMultiFileAuthState('wa_auth');
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(`Using WhatsApp Web v${version.join('.')} (latest: ${isLatest})`);
+    sock = makeWASocket({
+      version,                               // use the CURRENT WA Web protocol
+      auth: state,
+      logger: P({ level: 'silent' }),
+      browser: ['MeteoBot', 'Chrome', '1.0'],
+    });
+    sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('connection.update', (u) => {
-    const { connection, lastDisconnect, qr } = u;
-    if (qr) {
-      console.log('Scan this QR in WhatsApp > Linked devices:');
-      qrcode.generate(qr, { small: true });
-    }
-    if (connection === 'open') console.log('WhatsApp connected.');
-    if (connection === 'close') {
-      const err = lastDisconnect && lastDisconnect.error;
-      const code = err && err.output && err.output.statusCode;
-      console.log(`Connection closed. statusCode=${code} reason=${err && err.message}`);
-      const stop = code === DisconnectReason.loggedOut ||
-                   code === DisconnectReason.connectionReplaced;
-      if (stop) {
-        console.log('Not reconnecting (logged out or session replaced). '
-                    + 'Delete the wa_auth folder and restart to re-scan.');
-      } else {
-        setTimeout(start, 3000);             // back off before retrying
+    sock.ev.on('connection.update', (u) => {
+      const { connection, lastDisconnect, qr } = u;
+      if (qr) {
+        console.log('Scan this QR in WhatsApp > Linked devices:');
+        qrcode.generate(qr, { small: true });
       }
-    }
-  });
+      if (connection === 'open') { connected = true; markActivity(); console.log('WhatsApp connected.'); }
+      if (connection === 'close') {
+        connected = false;
+        const err = lastDisconnect && lastDisconnect.error;
+        const code = err && err.output && err.output.statusCode;
+        console.log(`Connection closed. statusCode=${code} reason=${err && err.message}`);
+        const stop = code === DisconnectReason.loggedOut ||
+                     code === DisconnectReason.connectionReplaced;
+        if (stop) {
+          loggedOut = true;
+          console.log('Not reconnecting (logged out or session replaced). '
+                      + 'Delete the wa_auth folder and restart to re-scan.');
+        } else {
+          scheduleReconnect(3000);           // back off before retrying
+        }
+      }
+    });
 
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    sock.ev.on('messages.upsert', handleUpsert);
+  } catch (e) {
+    console.error('start() error:', e.message);
+    scheduleReconnect(5000);
+  } finally {
+    starting = false;
+  }
+}
+
+// Watchdog: catch a silently-dead ("zombie") connection that never fires 'close'.
+setInterval(async () => {
+  if (loggedOut) return;
+  if (!connected) { scheduleReconnect(1000); return; }
+  if (Date.now() - lastActivity > STALE_MS) {
+    try {
+      await sock.sendPresenceUpdate('available');   // active probe + keepalive
+      markActivity();
+    } catch (e) {
+      console.log('[watchdog] keepalive failed -> reconnect:', e.message);
+      connected = false;
+      try { sock.end(); } catch (_) {}
+      scheduleReconnect(1000);
+    }
+  }
+}, 60000);
+
+async function handleUpsert({ messages, type }) {
     if (type !== 'notify') return;
+    markActivity();
     for (const m of messages) {
       if (!m.message || m.key.fromMe) continue;
       const jid = m.key.remoteJid || '';
@@ -109,7 +157,6 @@ async function start() {
         console.error('Python error:', e.message, e.response ? `(status ${e.response.status})` : '');
       }
     }
-  });
 }
 
 // HTTP endpoint so the Python alert loop can push messages to WhatsApp
