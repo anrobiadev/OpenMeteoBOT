@@ -74,6 +74,7 @@ import re
 import math
 import hashlib
 import html
+import subprocess
 import unicodedata
 import threading
 import requests
@@ -86,6 +87,12 @@ except Exception:
 from datetime import datetime, timezone, timedelta
 
 # --- Config ---
+# >>> restartsys password: change this (or set TG_RESTART_PASSWORD in meteobot.env).
+RESTART_PASSWORD = os.environ.get("TG_RESTART_PASSWORD", "admin")
+# systemd units restarted by `restartsys` (must match the sudoers NOPASSWD line).
+RESTART_UNITS = os.environ.get("TG_RESTART_UNITS",
+                               "meteobot.service wa-server.service wa-bridge.service")
+
 BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 STATE_FILE = os.environ.get("TG_BOT_STATE", "bot_state.json")
 # Shared across Telegram & WhatsApp (they have separate state files but the same
@@ -609,6 +616,12 @@ T = {
     "sys_anm": {"en": "🇷🇴 ANM warnings: <b>{feeds}</b>", "ro": "🇷🇴 Avertizari ANM: <b>{feeds}</b>"},
     "sys_chat": {"en": "📍 Saved: <b>{n}</b> · ⏰ alarms: <b>{a}</b> · 🕒 map tz: <b>{tz}</b>",
                  "ro": "📍 Salvate: <b>{n}</b> · ⏰ alarme: <b>{a}</b> · 🕒 fus harti: <b>{tz}</b>"},
+    "restart_usage": {"en": "Usage: <code>restartsys &lt;password&gt;</code>",
+                      "ro": "Utilizare: <code>restartsys &lt;parola&gt;</code>"},
+    "restart_bad_pw": {"en": "❌ Wrong password.", "ro": "❌ Parola gresita."},
+    "restart_ok": {"en": "🔄 Restarting services now… back in a few seconds.",
+                   "ro": "🔄 Repornesc serviciile acum… revin in cateva secunde."},
+    "restart_err": {"en": "Restart failed: {e}", "ro": "Repornire esuata: {e}"},
     "anm_off_word": {"en": "off", "ro": "oprit"},
     "anm_current": {
         "en": "ANM warnings: <b>{feeds}</b>\nSet with: <code>anm nowcasting,general</code> | <code>anm nowcasting</code> | <code>anm off</code>",
@@ -1928,7 +1941,8 @@ HELP = {
         "<code>anm</code> \u2014 official ANM warnings: <code>anm nowcasting,general</code> / <code>anm off</code>\n"
         "<code>alarm 1 21:05</code> \u2014 daily 24h forecast for slot 1 at 21:05 (<code>alarm off</code>)\n"
         "<code>interval 10</code> \u2014 how often alerts are checked, in minutes\n"
-        "<code>sysstatus</code> \u2014 service health (bot core, WhatsApp link, settings)\n\n"
+        "<code>sysstatus</code> \u2014 service health (bot core, WhatsApp link, settings)\n"
+        "<code>restartsys &lt;password&gt;</code> \u2014 restart the services (needs setup)\n\n"
         "<b>Units &amp; language</b>\n"
         "<code>units</code> \u2014 show current display units\n"
         "<code>units temp F</code> \u2014 set units (temp C/F, wind kmh/ms/mph/kn, "
@@ -1975,7 +1989,8 @@ HELP = {
         "<code>anm</code> \u2014 avertizari oficiale ANM: <code>anm nowcasting,general</code> / <code>anm off</code>\n"
         "<code>alarm 1 21:05</code> \u2014 prognoza zilnica 24h pentru slotul 1 la 21:05 (<code>alarm off</code>)\n"
         "<code>interval 10</code> \u2014 cat de des se verifica alertele, in minute\n"
-        "<code>sysstatus</code> \u2014 starea serviciilor (nucleu bot, WhatsApp, setari)\n\n"
+        "<code>sysstatus</code> \u2014 starea serviciilor (nucleu bot, WhatsApp, setari)\n"
+        "<code>restartsys &lt;parola&gt;</code> \u2014 reporneste serviciile (necesita configurare)\n\n"
         "<b>Unitati &amp; limba</b>\n"
         "<code>units</code> \u2014 arata unitatile de afisare curente\n"
         "<code>units temp F</code> \u2014 seteaza unitatile (temp C/F, wind kmh/ms/mph/kn, "
@@ -2337,6 +2352,24 @@ def cmd_sysstatus(args, chat_id):
     ]
     return "\n".join(lines)
 
+def cmd_restartsys(args, chat_id):
+    """Restart the systemd services — gated by a password. Detached + --no-block so
+    the command survives restarting its own service. Needs passwordless sudo (see README)."""
+    lang = get_lang(chat_id)
+    pw = " ".join(args).strip()
+    if not pw:
+        return tr("restart_usage", lang)
+    if pw != RESTART_PASSWORD:
+        return tr("restart_bad_pw", lang)
+    cmd = f"sleep 3; sudo -n systemctl restart --no-block {RESTART_UNITS}"
+    try:
+        subprocess.Popen(["sh", "-c", cmd], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        return tr("restart_err", lang, e=e)
+    print(f"[restartsys] triggered by chat {chat_id}: {RESTART_UNITS}")
+    return tr("restart_ok", lang)
+
 # --- Command router (easy to extend) ---
 COMMANDS = {
     "wx": cmd_wx, "model": cmd_model,
@@ -2345,6 +2378,7 @@ COMMANDS = {
     "air": cmd_air, "aer": cmd_air, "flood": cmd_flood, "inundatii": cmd_flood,
     "lang": cmd_lang, "anm": cmd_anm, "alarm": cmd_alarm, "alarma": cmd_alarm,
     "interval": cmd_interval, "sysstatus": cmd_sysstatus, "status": cmd_sysstatus, "sys": cmd_sysstatus,
+    "restartsys": cmd_restartsys, "restart": cmd_restartsys,
     "radar": cmd_radar, "sat": cmd_sat, "satelit": cmd_sat,
     "map": cmd_map, "harta": cmd_map, "mapset": cmd_mapset, "hartaset": cmd_mapset,
     "start": cmd_start, "help": cmd_start,

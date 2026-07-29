@@ -434,6 +434,7 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `alarm 1 21:05` / `alarm off` | Daily 24h forecast for a saved slot at a set time |
 | `interval 10` | Set how often alerts are checked, in minutes (global) |
 | `sysstatus` | Health report: bot core, WhatsApp link, interval, this chat's settings |
+| `restartsys <password>` | Restart all services (password-gated; needs one-time sudoers setup) |
 | `model` / `model iconeu` | Show / set the weather model |
 | `save 1 Orsova` | Save a location in slot 1 |
 | `locs` | List saved locations |
@@ -486,6 +487,31 @@ resent on every cycle.
   `TG_ADMIN_CHAT` to your Telegram ID (or rely on the first `TG_ALLOWED_USERS`);
   without it, monitoring is off. Both services must share the same working folder.
 
+### Remote restart (`restartsys`)
+
+`restartsys <password>` restarts `meteobot.service`, `wa-server.service` and
+`wa-bridge.service` from a chat message — handy after a `git pull`. It survives
+restarting its own service (runs detached with `--no-block`).
+
+- **Password.** Default is `admin` — **change it.** Either edit `RESTART_PASSWORD`
+  near the top of `meteo_bot.py`, or (better) set it in `meteobot.env`:
+
+  ```bash
+  echo 'TG_RESTART_PASSWORD=your-secret' >> ~/OpenMeteoBOT/meteobot.env
+  ```
+
+  (The password travels in the chat message, so treat it as low-security.)
+
+- **One-time setup: passwordless sudo** for exactly this restart, or nothing
+  happens (the bot runs as a normal user). Run `sudo visudo -f /etc/sudoers.d/meteobot`
+  and add (replace `mapszone` with your user; check the path with `which systemctl`):
+
+  ```
+  mapszone ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block meteobot.service wa-server.service wa-bridge.service
+  ```
+
+  If you change `TG_RESTART_UNITS`, update this line to match.
+
 ### Daily forecast alarm (`alarm`)
 
 Send the 24h forecast for a saved location automatically at a fixed time:
@@ -528,6 +554,8 @@ warning text and color come straight from ANM.
 | `TG_ADMIN_CHAT` | meteo_bot | first allowed user | Telegram chat that gets WhatsApp-down alerts |
 | `WA_STATUS_FILE` | both | `wa_status.json` | WhatsApp heartbeat file (bridge writes, bot reads) |
 | `WA_HEARTBEAT_STALE` | meteo_bot | `300` | Seconds without heartbeat before "bridge down" alert |
+| `TG_RESTART_PASSWORD` | meteo_bot | `admin` | Password for the `restartsys` command — change it |
+| `TG_RESTART_UNITS` | meteo_bot | the 3 services | systemd units `restartsys` restarts (must match sudoers) |
 | `TG_BOT_STATE` | both Python | `bot_state.json` | State file |
 | `TG_ALERT_INTERVAL` | both Python | `900` | Alert check interval (seconds; 900 = 15 min) |
 | `TG_ANM` | both Python | `1` | ANM official warnings on/off globally (`0` = off) |
