@@ -87,7 +87,7 @@ except Exception:
 from datetime import datetime, timezone, timedelta
 
 # --- Config ---
-# systemd units restarted by `restartsys` (uses your SYSTEM password via sudo -S,
+# systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
 # so nothing is stored and no sudoers editing is needed).
 RESTART_UNITS = os.environ.get("TG_RESTART_UNITS",
                                "meteobot.service wa-server.service wa-bridge.service")
@@ -662,8 +662,8 @@ T = {
     "sys_anm": {"en": "🇷🇴 ANM warnings: <b>{feeds}</b>", "ro": "🇷🇴 Avertizari ANM: <b>{feeds}</b>"},
     "sys_chat": {"en": "📍 Saved: <b>{n}</b> · ⏰ alarms: <b>{a}</b> · 🕒 map tz: <b>{tz}</b>",
                  "ro": "📍 Salvate: <b>{n}</b> · ⏰ alarme: <b>{a}</b> · 🕒 fus harti: <b>{tz}</b>"},
-    "restart_usage": {"en": "Usage: <code>restartsys &lt;your system password&gt;</code>",
-                      "ro": "Utilizare: <code>restartsys &lt;parola ta de sistem&gt;</code>"},
+    "restart_usage": {"en": "Usage: <code>restart &lt;your system password&gt;</code>",
+                      "ro": "Utilizare: <code>restart &lt;parola ta de sistem&gt;</code>"},
     "restart_bad_pw": {"en": "❌ Wrong password.", "ro": "❌ Parola gresita."},
     "restart_no_verify": {
         "en": "⚠️ Can't verify the password (PAM not installed). Restart aborted for safety. "
@@ -2058,8 +2058,8 @@ HELP = {
         "<code>anm</code> \u2014 official ANM warnings: <code>anm nowcasting,general</code> / <code>anm off</code>\n"
         "<code>alarm 1 21:05</code> \u2014 daily 24h forecast for slot 1 at 21:05 (<code>alarm off</code>)\n"
         "<code>interval 10</code> \u2014 how often alerts are checked, in minutes\n"
-        "<code>sysstatus</code> \u2014 service health (bot core, WhatsApp link, settings)\n"
-        "<code>restartsys &lt;password&gt;</code> \u2014 restart the services (needs setup)\n\n"
+        "<code>status</code> \u2014 service health (bot core, WhatsApp link, settings)\n"
+        "<code>restart &lt;system password&gt;</code> \u2014 restart the services\n\n"
         "<b>Units &amp; language</b>\n"
         "<code>units</code> \u2014 show current display units\n"
         "<code>units temp F</code> \u2014 set units (temp C/F, wind kmh/ms/mph/kn, "
@@ -2107,8 +2107,8 @@ HELP = {
         "<code>anm</code> \u2014 avertizari oficiale ANM: <code>anm nowcasting,general</code> / <code>anm off</code>\n"
         "<code>alarm 1 21:05</code> \u2014 prognoza zilnica 24h pentru slotul 1 la 21:05 (<code>alarm off</code>)\n"
         "<code>interval 10</code> \u2014 cat de des se verifica alertele, in minute\n"
-        "<code>sysstatus</code> \u2014 starea serviciilor (nucleu bot, WhatsApp, setari)\n"
-        "<code>restartsys &lt;parola&gt;</code> \u2014 reporneste serviciile (necesita configurare)\n\n"
+        "<code>status</code> \u2014 starea serviciilor (nucleu bot, WhatsApp, setari)\n"
+        "<code>restart &lt;parola de sistem&gt;</code> \u2014 reporneste serviciile\n\n"
         "<b>Unitati &amp; limba</b>\n"
         "<code>units</code> \u2014 arata unitatile de afisare curente\n"
         "<code>units temp F</code> \u2014 seteaza unitatile (temp C/F, wind kmh/ms/mph/kn, "
@@ -2443,7 +2443,7 @@ def cmd_interval(args, chat_id):
     set_alert_interval(mins * 60)
     return tr("interval_set", lang, m=mins, s=mins * 60)
 
-def cmd_sysstatus(args, chat_id):
+def cmd_status(args, chat_id):
     """Clear on-demand health report: bot core, WhatsApp link, interval, this chat."""
     lang = get_lang(chat_id)
     state, age = wa_health()
@@ -2484,7 +2484,7 @@ def _verify_system_password(pw):
     except Exception:
         return None
 
-def cmd_restartsys(args, chat_id):
+def cmd_restart(args, chat_id):
     """Restart the systemd services. The password is checked (dedicated
     TG_RESTART_PASSWORD if set, otherwise the system password via PAM). Fails CLOSED:
     it never restarts unless the password was actually verified. Detached + --no-block
@@ -2513,13 +2513,13 @@ def cmd_restartsys(args, chat_id):
         p.stdin.write(pw + "\n"); p.stdin.flush(); p.stdin.close()
     except Exception as e:
         return tr("restart_err", lang, e=e)
-    print(f"[restartsys] triggered by chat {chat_id}: {RESTART_UNITS}")
+    print(f"[restart] triggered by chat {chat_id}: {RESTART_UNITS}")
     return tr("restart_ok", lang)
 
 def redact_log(text):
     """Hide the password when a restart command is echoed to the logs."""
     parts = (text or "").lstrip("/").split()
-    if parts and parts[0].lower() in ("restartsys", "restart") and len(parts) > 1:
+    if parts and parts[0].lower() in ("restart", "restartsys") and len(parts) > 1:
         return parts[0] + " ***"
     return text
 
@@ -2531,8 +2531,9 @@ COMMANDS = {
     "air": cmd_air, "aer": cmd_air, "flood": cmd_flood, "inundatii": cmd_flood,
     "marine": cmd_marine, "mare": cmd_marine,
     "lang": cmd_lang, "anm": cmd_anm, "alarm": cmd_alarm, "alarma": cmd_alarm,
-    "interval": cmd_interval, "sysstatus": cmd_sysstatus, "status": cmd_sysstatus, "sys": cmd_sysstatus,
-    "restartsys": cmd_restartsys, "restart": cmd_restartsys,
+    "interval": cmd_interval,
+    "status": cmd_status, "sysstatus": cmd_status, "sys": cmd_status,   # sysstatus kept as alias
+    "restart": cmd_restart, "restartsys": cmd_restart,                  # restartsys kept as alias
     "radar": cmd_radar, "sat": cmd_sat, "satelit": cmd_sat,
     "map": cmd_map, "harta": cmd_map, "mapset": cmd_mapset, "hartaset": cmd_mapset,
     "start": cmd_start, "help": cmd_start,

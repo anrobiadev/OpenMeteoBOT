@@ -434,8 +434,8 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `mapset` | Map settings (radar source, dim, cloud colour/opacity, zoom, time zone) |
 | `alarm 1 21:05` / `alarm off` | Daily 24h forecast for a saved slot at a set time |
 | `interval 10` | Set how often alerts are checked, in minutes (global) |
-| `sysstatus` | Health report: bot core, WhatsApp link, interval, this chat's settings |
-| `restartsys <system password>` | Restart all services (uses your system password via sudo; nothing stored) |
+| `status` | Health report: bot core, WhatsApp link, interval, this chat's settings |
+| `restart <system password>` | Restart all services (uses your system password via sudo; nothing stored) |
 | `model` / `model iconeu` | Show / set the weather model |
 | `save 1 Orsova` | Save a location in slot 1 |
 | `locs` | List saved locations |
@@ -475,9 +475,9 @@ resent on every cycle.
   The ANM radar image geo-bounds are fixed in the code (correct national extent),
   overridable only via the `TG_ANM_BBOX` env var if ever needed.
 
-### Health monitoring & `sysstatus`
+### Health monitoring & `status`
 
-- **`sysstatus`** (aliases `status`, `sys`) prints an on-demand health report:
+- **`status`** (aliases `sysstatus`, `sys`) prints an on-demand health report:
   bot core, WhatsApp link state (connected / disconnected / logged out / bridge
   down, with heartbeat age), the alert interval, and this chat's saved
   locations / alarms / ANM feeds / map time zone.
@@ -488,9 +488,9 @@ resent on every cycle.
   `TG_ADMIN_CHAT` to your Telegram ID (or rely on the first `TG_ALLOWED_USERS`);
   without it, monitoring is off. Both services must share the same working folder.
 
-### Remote restart (`restartsys`)
+### Remote restart (`restart`)
 
-`restartsys <your system password>` restarts `meteobot.service`,
+`restart <your system password>` (alias `restartsys`) restarts `meteobot.service`,
 `wa-server.service` and `wa-bridge.service` from a chat message — handy after a
 `git pull`. It survives restarting its own service (runs detached with
 `--no-block`).
@@ -505,7 +505,7 @@ resent on every cycle.
     pip install python-pam --break-system-packages
     ```
 
-    Without it, `restartsys` refuses to run (it will not restart on an unverified
+    Without it, `restart` refuses to run (it will not restart on an unverified
     password) and tells you to install PAM or set a dedicated password.
   - **Dedicated password (no PAM needed):** set one in `meteobot.env` (same folder,
     no `/etc` editing):
@@ -567,8 +567,8 @@ warning text and color come straight from ANM.
 | `TG_ADMIN_CHAT` | meteo_bot | first allowed user | Telegram chat that gets WhatsApp-down alerts |
 | `WA_STATUS_FILE` | both | `wa_status.json` | WhatsApp heartbeat file (bridge writes, bot reads) |
 | `WA_HEARTBEAT_STALE` | meteo_bot | `300` | Seconds without heartbeat before "bridge down" alert |
-| `TG_RESTART_PASSWORD` | meteo_bot | unset | Optional dedicated password for `restartsys` (else the system password via PAM) |
-| `TG_RESTART_UNITS` | meteo_bot | the 3 services | systemd units `restartsys` restarts |
+| `TG_RESTART_PASSWORD` | meteo_bot | unset | Optional dedicated password for `restart` (else the system password via PAM) |
+| `TG_RESTART_UNITS` | meteo_bot | the 3 services | systemd units `restart` restarts |
 | `TG_BOT_STATE` | both Python | `bot_state.json` | State file |
 | `TG_ALERT_INTERVAL` | both Python | `900` | Alert check interval (seconds; 900 = 15 min) |
 | `TG_ANM` | both Python | `1` | ANM official warnings on/off globally (`0` = off) |
