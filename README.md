@@ -457,6 +457,10 @@ resent on every cycle.
 - **`radar`** shows the **national radar image published by ANM** (in-country
   radars) stretched onto a faded OpenStreetMap base so borders line up. Add a
   location (`radar Orsova`) to drop a marker. Needs Pillow.
+  **ANM's official colour scale** (reflectivity in dBZ) is fetched from their radar
+  page and drawn under the map, so the colours match the source exactly. Disable
+  with `TG_ANM_SCALE=0`; the RainViewer source instead gets a text colour legend
+  in the caption.
 - **`sat Orsova`** shows **cloud cover** from Open-Meteo (grey = cloudier). The
   free RainViewer tier has no satellite, so cloud cover is used instead.
 - **`map Orsova`** overlays clouds + radar on one image.
@@ -581,6 +585,8 @@ warning text and color come straight from ANM.
 | `TG_CLOUD_COLS` / `TG_CLOUD_ROWS` | meteo_bot | `14` / `12` | Cloud sampling grid |
 | `TG_ANM_BBOX` | meteo_bot | `17.9727,42.0465,31.4767,49.1441` | Geo bounds (W,S,E,N) of the ANM radar image |
 | `TG_ANM_MAP_W` | meteo_bot | `1000` | ANM radar output width (px) |
+| `TG_ANM_SCALE` | meteo_bot | `1` | Draw ANM's official dBZ colour scale under the radar map (`0` = off) |
+| `TG_ANM_SCALE_URL` | meteo_bot | ANM `sclrZ.png` | URL of ANM's colour-scale image |
 | `TG_ANM_RADAR_URL` | meteo_bot | meteoromania.ro URL | ANM radar image URL template |
 | `TG_ANM_RADAR_OFFSET` / `TG_ANM_RADAR_LOOKBACK` | meteo_bot | `1` / `9` | ANM radar timestamp probing (minute offset / slots back) |
 | `PY_PORT` | wa_server | `5000` | Python service port |

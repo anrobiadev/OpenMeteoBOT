@@ -591,6 +591,14 @@ T = {
     "map_src": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_radar": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_anm": {"en": "source: meteoromania.ro (ANM), \u00a9 OpenStreetMap", "ro": "sursa: meteoromania.ro (ANM), \u00a9 OpenStreetMap"},
+    "radar_legend_anm": {
+        "en": ("<b>Colour scale</b> (bottom of the image) — ANM's own reflectivity scale in "
+               "<b>dBZ</b>: blue/green = light–moderate rain, yellow/orange = heavy, "
+               "red/magenta = torrential, possible hail. Blank = no echo."),
+        "ro": ("<b>Scara de culori</b> (jos in imagine) — scara oficiala ANM de reflectivitate in "
+               "<b>dBZ</b>: albastru/verde = ploaie slaba–moderata, galben/portocaliu = puternica, "
+               "rosu/magenta = torentiala, posibil grindina. Gol = fara ecou."),
+    },
     "radar_legend": {
         "en": ("<b>Colour legend</b> (precipitation intensity):\n"
                "\U0001f535 blue/cyan \u2014 light rain (drizzle)\n"
@@ -1489,6 +1497,38 @@ ANM_RADAR_URL = os.environ.get(
 ANM_RADAR_OFFSET_MIN = int(os.environ.get("TG_ANM_RADAR_OFFSET", "1"))
 ANM_RADAR_LOOKBACK = int(os.environ.get("TG_ANM_RADAR_LOOKBACK", "9"))
 _anm_radar_cache = {"t": 0, "png": None, "dt": None}
+# ANM's own reflectivity (dBZ) colour scale, as shown on their radar page.
+ANM_SCALE_URL = os.environ.get("TG_ANM_SCALE_URL",
+                               "https://www.meteoromania.ro/radarm/img/sclrZ.png")
+ANM_SHOW_SCALE = os.environ.get("TG_ANM_SCALE", "1") != "0"
+_anm_scale_cache = {"t": 0, "img": None}
+
+def anm_scale_image():
+    """ANM's official colour scale image (cached ~1h). None if unavailable."""
+    if not _PIL:
+        return None
+    now = time.time()
+    if _anm_scale_cache["img"] is not None and now - _anm_scale_cache["t"] < 3600:
+        return _anm_scale_cache["img"]
+    img = _fetch_img(ANM_SCALE_URL)
+    if img is not None:
+        _anm_scale_cache.update(t=now, img=img)
+    return img
+
+def _attach_scale(base, scale, pad=8, max_frac=0.18):
+    """Return a new image = `base` with ANM's scale strip added underneath."""
+    bw, bh = base.size
+    sw, sh = scale.size
+    target_w = bw - 2 * pad
+    new_h = max(1, int(round(sh * target_w / float(sw))))
+    if new_h > int(bh * max_frac):                 # too tall (vertical bar) -> fit by height
+        new_h = int(bh * max_frac)
+        target_w = max(1, int(round(sw * new_h / float(sh))))
+    strip = scale.resize((target_w, new_h), Image.LANCZOS)
+    out = Image.new("RGBA", (bw, bh + new_h + 2 * pad), (255, 255, 255, 255))
+    out.paste(base, (0, 0))
+    out.alpha_composite(strip, ((bw - target_w) // 2, bh + pad))
+    return out
 
 def _anm_radar_candidates(now=None):
     """UTC timestamps to try, newest first: minute floored to 10 + OFFSET, then back."""
@@ -1569,6 +1609,13 @@ def build_anm_radar_map(mlat=None, mlon=None, base_dim=None, bbox=None, tz=None)
             mx, my = int(px), int(py)
             d.ellipse([mx - 7, my - 7, mx + 7, my + 7], outline=(255, 0, 0, 255), width=3)
             d.ellipse([mx - 2, my - 2, mx + 2, my + 2], fill=(255, 0, 0, 255))
+    if ANM_SHOW_SCALE:                    # ANM's own dBZ colour scale, under the map
+        scale = anm_scale_image()
+        if scale is not None:
+            try:
+                base = _attach_scale(base, scale)
+            except Exception:
+                pass                      # never fail the map because of the scale
     out = BytesIO()
     base.convert("RGB").save(out, format="PNG")
     return out.getvalue(), label
@@ -2226,7 +2273,8 @@ def cmd_radar(args, chat_id):
         return tr("map_nodata", lang)
     cap = f"\U0001f4e1 <b>{tr('cap_radar', lang)}</b>"
     cap += "\n" + (f"{tlabel} · " if tlabel else "") + tr("map_src_anm", lang)
-    cap += "\n\n" + tr("radar_legend", lang)
+    # ANM's official scale is drawn on the image itself; explain what it means.
+    cap += "\n\n" + tr("radar_legend_anm" if ANM_SHOW_SCALE else "radar_legend", lang)
     return Photo(png, cap)
 
 def cmd_sat(args, chat_id):
