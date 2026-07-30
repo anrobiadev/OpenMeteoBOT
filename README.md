@@ -420,12 +420,13 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `help` | Full command list |
 | `Orsova` | 24-hour hourly forecast (just type the place name) |
 | `44.816,29.879` | Forecast by coordinates |
-| `Orsova 3` | 3-day forecast (up to 16) |
+| `Orsova 3` | 3-day forecast (up to 16) — hourly and daily lines now include the wind direction |
 | `3` | 3-day forecast for all saved locations |
 | `clad` | Partial name matches a saved location (Cladova) |
 | `soil Orsova` | Soil moisture + temperature, now |
 | `air Orsova` | Air quality — European AQI + PM2.5/PM10/O₃/NO₂/SO₂/CO + UV, each explained in plain language |
 | `flood Orsova [days]` | River-discharge (flood) forecast, GloFAS |
+| `wind Orsova` | Wind speed + direction at 10/80/120/180 m, gusts, and the next hours |
 | `marine Constanta` | Sea state — wave height/period/direction, swell, wind waves, sea-surface temperature |
 | `hist Orsova 2025-07-01 2025-07-10` | Past weather for a period |
 | `radar` | National radar image from ANM, over a faded map |

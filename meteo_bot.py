@@ -534,6 +534,20 @@ T = {
               "river-specific — watch a sharp rise vs the usual level, not the raw number.",
         "ro": "Debitul = volumul de apa ce trece pe secunda (m³/s). Riscul de inundatie e "
               "specific fiecarui rau — urmareste o crestere brusca fata de nivelul obisnuit, nu cifra in sine."},
+    # wind profile
+    "wind_usage": {"en": "Usage: <code>wind Orsova</code> (city, coordinates, or a saved slot)",
+                   "ro": "Utilizare: <code>wind Orsova</code> (oras, coordonate sau un slot salvat)"},
+    "wind_title": {"en": "wind by height", "ro": "vantul pe inaltimi"},
+    "wind_nodata": {"en": "No wind data for this point.", "ro": "Fara date de vant pentru acest punct."},
+    "wind_now_hdr": {"en": "<b>Now ({t})</b> — speed &amp; direction it blows FROM:",
+                     "ro": "<b>Acum ({t})</b> — viteza si directia DIN care bate:"},
+    "wind_gust_now": {"en": "  \U0001f4a8 gusts (10 m): {v}", "ro": "  \U0001f4a8 rafale (10 m): {v}"},
+    "wind_next_hdr": {"en": "<b>Next hours (10 m)</b>:", "ro": "<b>Urmatoarele ore (10 m)</b>:"},
+    "wind_legend": {
+        "en": "Direction = where the wind comes FROM (NW = blows from north-west). "
+              "Higher up it's usually stronger: 10 m ≈ ground level, 80–180 m ≈ turbine/tower height.",
+        "ro": "Directia = de UNDE bate vantul (NV = bate dinspre nord-vest). "
+              "In inaltime e de obicei mai puternic: 10 m ≈ la sol, 80–180 m ≈ inaltime turbina/turn."},
     # marine / sea state
     "marine_usage": {"en": "Usage: <code>marine Constanta</code> (a coastal/sea point)",
                      "ro": "Utilizare: <code>marine Constanta</code> (un punct pe mare/coasta)"},
@@ -877,7 +891,8 @@ def forecast(lat, lon, model_id, units):
     params = {
         "latitude": lat, "longitude": lon,
         "hourly": "temperature_2m,apparent_temperature,precipitation_probability,"
-                  "precipitation,weather_code,wind_speed_10m,wind_gusts_10m,surface_pressure",
+                  "precipitation,weather_code,wind_speed_10m,wind_direction_10m,"
+                  "wind_gusts_10m,surface_pressure",
         "forecast_days": 2, "timezone": "auto",
         "temperature_unit": OM_TEMP[units["temp"]],
         "wind_speed_unit": units["wind"],
@@ -919,6 +934,7 @@ def format_24h(city, data, model_label, units, lang="en"):
     prec_a = h.get("precipitation", [None] * n)
     code_a = h.get("weather_code", [None] * n)
     wind_a = h.get("wind_speed_10m", [None] * n)
+    wdir_a = h.get("wind_direction_10m", [None] * n)
     gust_a = h.get("wind_gusts_10m", [None] * n)
     pres_a = h.get("surface_pressure", [None] * n)
 
@@ -953,9 +969,10 @@ def format_24h(city, data, model_label, units, lang="en"):
         pv = fmt_pressure(pres_a[i], units["pressure"])
         pres_s = f"  {pv} {plab}" if pv is not None else ""
         desc, emo = wmo_desc(code_a[i], lang) if code_a[i] is not None else ("", "")
+        wd_s = f" {compass(wdir_a[i])}" if wdir_a[i] is not None else ""
         lines.append(
             f"{t:%H:%M} {emo} {temp}{tlab} ({feels_w} {feel}\u00b0)  "
-            f"\U0001f4a7{pop_s}{amt_s}  \U0001f4a8{wind} {wlab} ({gust_w} {gust}){pres_s}  {desc}"
+            f"\U0001f4a7{pop_s}{amt_s}  \U0001f4a8{wind} {wlab}{wd_s} ({gust_w} {gust}){pres_s}  {desc}"
         )
     return "\n".join(lines)
 
@@ -965,7 +982,7 @@ def forecast_daily(lat, lon, model_id, units, days):
         "latitude": lat, "longitude": lon,
         "daily": "weather_code,temperature_2m_max,temperature_2m_min,"
                  "precipitation_sum,precipitation_probability_max,"
-                 "wind_speed_10m_max,wind_gusts_10m_max",
+                 "wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant",
         "forecast_days": max(1, min(days, DAILY_MAX)), "timezone": "auto",
         "temperature_unit": OM_TEMP[units["temp"]],
         "wind_speed_unit": units["wind"],
@@ -990,6 +1007,7 @@ def format_daily(city, data, model_label, units, days, lang="en"):
     pprob = d.get("precipitation_probability_max", [None] * n)
     wmax = d.get("wind_speed_10m_max", [None] * n)
     gmax = d.get("wind_gusts_10m_max", [None] * n)
+    wdir = d.get("wind_direction_10m_dominant", [None] * n)
     tlab = UNIT_LABELS["temp"][units["temp"]]
     wlab = UNIT_LABELS["wind"][units["wind"]]
     rlab = UNIT_LABELS["rain"][units["rain"]]
@@ -1010,9 +1028,10 @@ def format_daily(city, data, model_label, units, days, lang="en"):
         ps_s = f" {ps:g}{rlab}" if ps else ""
         wnd = str(round(wmax[i])) if wmax[i] is not None else "\u2014"
         gst = str(round(gmax[i])) if gmax[i] is not None else "\u2014"
+        wd_s = f" {compass(wdir[i])}" if wdir[i] is not None else ""
         lines.append(
             f"{wd} {dt:%d.%m} {emo} {lo}/{hi}{tlab}  "
-            f"\U0001f4a7{pr_s}{ps_s}  \U0001f4a8{wnd} {wlab} ({gust_w} {gst})  {desc}"
+            f"\U0001f4a7{pr_s}{ps_s}  \U0001f4a8{wnd} {wlab}{wd_s} ({gust_w} {gst})  {desc}"
         )
     return "\n".join(lines)
 
@@ -2059,13 +2078,77 @@ def cmd_flood(args, chat_id):
     lines.append(tr("flood_note", lang))
     return "\n".join(lines)
 
-# --- Marine / sea state (Open-Meteo Marine API) ---
+# --- Wind & sea helpers ---
 _COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 
 def compass(deg):
     if deg is None:
         return ""
     return _COMPASS[int((float(deg) % 360) / 45.0 + 0.5) % 8]
+
+# --- Wind profile by height (Open-Meteo gives 10/80/120/180 m) ---
+WIND_LEVELS = (10, 80, 120, 180)
+
+def cmd_wind(args, chat_id):
+    """Wind speed/gusts/direction now and next hours, at several heights."""
+    lang = get_lang(chat_id)
+    if not args:
+        return tr("wind_usage", lang)
+    loc, err = find_location(" ".join(args), chat_id, lang)
+    if err:
+        return err
+    units = get_units(chat_id)
+    model_id, model_label = MODELS.get(get_model(chat_id), MODELS[DEFAULT_MODEL])
+    hourly = ",".join([f"wind_speed_{m}m" for m in WIND_LEVELS] +
+                      [f"wind_direction_{m}m" for m in WIND_LEVELS] + ["wind_gusts_10m"])
+    params = {"latitude": loc["lat"], "longitude": loc["lon"], "hourly": hourly,
+              "forecast_days": 2, "timezone": "auto", "wind_speed_unit": units["wind"]}
+    if model_id and model_id != "best_match":
+        params["models"] = model_id
+    r = requests.get(FC_URL, params=params, timeout=15)
+    r.raise_for_status()
+    data = r.json()
+    h = data.get("hourly", {})
+    times = h.get("time", [])
+    if not times:
+        return tr("wind_nodata", lang)
+    off = timedelta(seconds=data.get("utc_offset_seconds", 0))
+    now = (datetime.now(timezone.utc) + off).replace(tzinfo=None, minute=0, second=0, microsecond=0)
+    idx = 0
+    for i, t in enumerate(times):
+        if datetime.fromisoformat(t) >= now:
+            idx = i
+            break
+    wlab = UNIT_LABELS["wind"][units["wind"]]
+
+    def at(key, i):
+        a = h.get(key)
+        return a[i] if a and i < len(a) and a[i] is not None else None
+
+    lines = [f"\U0001f4cd <b>{loc_label(loc)}</b> — {tr('wind_title', lang)}",
+             tr("src_model", lang, model=model_label) + "\n",
+             tr("wind_now_hdr", lang, t=times[idx][-5:])]
+    for mlvl in WIND_LEVELS:                       # profile: speed + direction per height
+        sp = at(f"wind_speed_{mlvl}m", idx)
+        dr = at(f"wind_direction_{mlvl}m", idx)
+        sp_s = f"<b>{sp:.0f} {wlab}</b>" if sp is not None else "<b>—</b>"
+        dr_s = f" {compass(dr)} ({round(dr)}°)" if dr is not None else ""
+        lines.append(f"  {mlvl:>3} m: {sp_s}{dr_s}")
+    g = at("wind_gusts_10m", idx)
+    if g is not None:
+        lines.append(tr("wind_gust_now", lang, v=f"<b>{g:.0f} {wlab}</b>"))
+
+    lines.append("\n" + tr("wind_next_hdr", lang))
+    for i in range(idx, min(idx + 12, len(times)), 3):   # every 3h, next ~12h
+        sp = at("wind_speed_10m", i)
+        dr = at("wind_direction_10m", i)
+        gg = at("wind_gusts_10m", i)
+        sp_s = f"<b>{sp:.0f}</b>" if sp is not None else "<b>—</b>"
+        gg_s = f" ({tr('gust', lang)} <b>{gg:.0f}</b>)" if gg is not None else ""
+        dr_s = f" {compass(dr)}" if dr is not None else ""
+        lines.append(f"  {times[i][-5:]}: {sp_s} {wlab}{dr_s}{gg_s}")
+    lines.append("\n<i>" + tr("wind_legend", lang) + "</i>")
+    return "\n".join(lines)
 
 def cmd_marine(args, chat_id):
     lang = get_lang(chat_id)
@@ -2190,6 +2273,7 @@ HELP = {
         "<code>soil Orsova</code> \u2014 soil moisture + temperature now\n"
         "<code>air Orsova</code> \u2014 air quality (European AQI + pollutants)\n"
         "<code>flood Orsova</code> \u2014 river discharge forecast (GloFAS)\n"
+        "<code>wind Orsova</code> \u2014 wind speed &amp; direction at 10/80/120/180 m\n"
         "<code>marine Constanta</code> \u2014 sea state: waves, swell, water temp\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 past weather for a period\n\n"
         "<b>Maps</b>\n"
@@ -2239,6 +2323,7 @@ HELP = {
         "<code>soil Orsova</code> \u2014 umiditatea solului + temperatura acum\n"
         "<code>air Orsova</code> \u2014 calitatea aerului (AQI european + poluanti)\n"
         "<code>flood Orsova</code> \u2014 prognoza debit rau (GloFAS)\n"
+        "<code>wind Orsova</code> \u2014 viteza si directia vantului la 10/80/120/180 m\n"
         "<code>marine Constanta</code> \u2014 starea marii: valuri, hula, temp apa\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 vremea din trecut pe o perioada\n\n"
         "<b>Harti</b>\n"
@@ -2694,7 +2779,7 @@ COMMANDS = {
     "save": cmd_save, "locs": cmd_locs, "del": cmd_del, "alerts": cmd_alerts,
     "set": cmd_set, "units": cmd_units, "soil": cmd_soil, "hist": cmd_hist,
     "air": cmd_air, "aer": cmd_air, "flood": cmd_flood, "inundatii": cmd_flood,
-    "marine": cmd_marine, "mare": cmd_marine,
+    "marine": cmd_marine, "mare": cmd_marine, "wind": cmd_wind, "vant": cmd_wind,
     "lang": cmd_lang, "anm": cmd_anm, "alarm": cmd_alarm, "alarma": cmd_alarm,
     "interval": cmd_interval,
     "status": cmd_status, "sysstatus": cmd_status, "sys": cmd_status,   # sysstatus kept as alias
