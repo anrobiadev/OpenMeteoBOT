@@ -551,10 +551,10 @@ T = {
     "wind_band_note": {
         "en": "Values are interpolated between the model levels (10–180 m and pressure levels), "
               "on wind vectors. Gusts are measured at 10 m and can be stronger aloft — "
-              "always check local drone rules and the actual site conditions.",
+              "always check local UAS/drone rules and the actual site conditions.",
         "ro": "Valorile sunt interpolate intre nivelele modelului (10–180 m si nivele de presiune), "
               "pe vectori de vant. Rafalele sunt masurate la 10 m si pot fi mai puternice in inaltime — "
-              "verifica intotdeauna reglementarile pentru drone si conditiile reale din teren."},
+              "verifica intotdeauna reglementarile UAS/drone si conditiile reale din teren."},
     "wind_next_hdr": {"en": "<b>Next hours (10 m)</b>:", "ro": "<b>Urmatoarele ore (10 m)</b>:"},
     "wind_legend": {
         "en": "Direction = where the wind comes FROM (NW = blows from north-west). "
@@ -2107,8 +2107,8 @@ def compass(deg):
 # geopotential height and subtract the terrain elevation to get metres above ground.
 WIND_LEVELS = (10, 80, 120, 180)
 WIND_PLEVELS = (975, 950, 900, 850, 700)     # ≈ 300 m, 600 m, 1 km, 1.5 km, 3 km
-DRONE_RANGE = (250, 800)                     # default band for `wind <loc> drone`
-DRONE_STEP = 100
+UAS_RANGE = (250, 800)                     # default band for `wind <loc> uas`
+UAS_STEP = 100
 
 def _uv(speed, deg):
     """Wind speed+direction (FROM, degrees) -> u,v vector components."""
@@ -2144,15 +2144,15 @@ def interp_wind_profile(levels, targets):
 
 def cmd_wind(args, chat_id):
     """Wind speed/gusts/direction now and next hours, at several heights.
-    Optional band: `wind Orsova drone` or `wind Orsova 250-800` -> interpolated
-    profile every 100 m (useful for drone flight levels)."""
+    Optional band: `wind Orsova uas` or `wind Orsova 250-800` -> interpolated
+    profile every 100 m (UAS / drone flight levels)."""
     lang = get_lang(chat_id)
     if not args:
         return tr("wind_usage", lang)
     toks = list(args)
     band = None
-    if toks and toks[-1].lower() in ("drone", "drona", "dron"):
-        band = DRONE_RANGE
+    if toks and toks[-1].lower() in ("uas", "drone", "drona", "dron"):   # 'drone' kept as alias
+        band = UAS_RANGE
         toks = toks[:-1]
     else:                                   # trailing "250-800" or "250 800"
         mt = re.match(r"^(\d{2,5})\s*-\s*(\d{2,5})$", toks[-1]) if toks else None
@@ -2224,10 +2224,10 @@ def cmd_wind(args, chat_id):
     lines = [f"\U0001f4cd <b>{loc_label(loc)}</b> — {tr('wind_title', lang)}",
              tr("src_model", lang, model=model_label) + "\n"]
 
-    if band:                                       # drone band: every 100 m, interpolated
+    if band:                                       # UAS band: every 100 m, interpolated
         lo_b, hi_b = int(band[0]), int(band[1])
-        first = ((lo_b + DRONE_STEP - 1) // DRONE_STEP) * DRONE_STEP   # next round 100
-        targets = [lo_b] + [x for x in range(first, hi_b + 1, DRONE_STEP) if x > lo_b]
+        first = ((lo_b + UAS_STEP - 1) // UAS_STEP) * UAS_STEP   # next round 100
+        targets = [lo_b] + [x for x in range(first, hi_b + 1, UAS_STEP) if x > lo_b]
         if hi_b not in targets:                    # always include the top of the band
             targets.append(hi_b)
         prof = interp_wind_profile(known, targets)
@@ -2398,7 +2398,7 @@ HELP = {
         "<code>air Orsova</code> \u2014 air quality (European AQI + pollutants)\n"
         "<code>flood Orsova</code> \u2014 river discharge forecast (GloFAS)\n"
         "<code>wind Orsova</code> \u2014 wind speed &amp; direction by height (10 m \u2026 ~3 km)\n"
-        "<code>wind Orsova drone</code> \u2014 250\u2013800 m every 100 m (or <code>wind Orsova 300-600</code>)\n"
+        "<code>wind Orsova uas</code> \u2014 250\u2013800 m every 100 m (or <code>wind Orsova 300-600</code>)\n"
         "<code>marine Constanta</code> \u2014 sea state: waves, swell, water temp\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 past weather for a period\n\n"
         "<b>Maps</b>\n"
@@ -2449,7 +2449,7 @@ HELP = {
         "<code>air Orsova</code> \u2014 calitatea aerului (AQI european + poluanti)\n"
         "<code>flood Orsova</code> \u2014 prognoza debit rau (GloFAS)\n"
         "<code>wind Orsova</code> \u2014 viteza si directia vantului pe inaltimi (10 m \u2026 ~3 km)\n"
-        "<code>wind Orsova drone</code> \u2014 250\u2013800 m din 100 in 100 (sau <code>wind Orsova 300-600</code>)\n"
+        "<code>wind Orsova uas</code> \u2014 250\u2013800 m din 100 in 100 (sau <code>wind Orsova 300-600</code>)\n"
         "<code>marine Constanta</code> \u2014 starea marii: valuri, hula, temp apa\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 vremea din trecut pe o perioada\n\n"
         "<b>Harti</b>\n"
