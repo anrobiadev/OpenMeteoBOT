@@ -542,12 +542,16 @@ T = {
     "wind_now_hdr": {"en": "<b>Now ({t})</b> — speed &amp; direction it blows FROM:",
                      "ro": "<b>Acum ({t})</b> — viteza si directia DIN care bate:"},
     "wind_gust_now": {"en": "  \U0001f4a8 gusts (10 m): {v}", "ro": "  \U0001f4a8 rafale (10 m): {v}"},
+    "wind_upper_hdr": {"en": "<b>Higher up</b> (height above ground, from pressure levels):",
+                       "ro": "<b>La inaltime</b> (metri deasupra solului, din nivele de presiune):"},
     "wind_next_hdr": {"en": "<b>Next hours (10 m)</b>:", "ro": "<b>Urmatoarele ore (10 m)</b>:"},
     "wind_legend": {
         "en": "Direction = where the wind comes FROM (NW = blows from north-west). "
-              "Higher up it's usually stronger: 10 m ≈ ground level, 80–180 m ≈ turbine/tower height.",
+              "10 m ≈ ground level, 80–180 m ≈ turbine/tower height. Higher levels come from "
+              "pressure surfaces, so their height shifts a little with the weather.",
         "ro": "Directia = de UNDE bate vantul (NV = bate dinspre nord-vest). "
-              "In inaltime e de obicei mai puternic: 10 m ≈ la sol, 80–180 m ≈ inaltime turbina/turn."},
+              "10 m ≈ la sol, 80–180 m ≈ inaltime turbina/turn. Nivelele de sus vin din suprafete "
+              "de presiune, deci inaltimea lor variaza putin cu vremea."},
     # marine / sea state
     "marine_usage": {"en": "Usage: <code>marine Constanta</code> (a coastal/sea point)",
                      "ro": "Utilizare: <code>marine Constanta</code> (un punct pe mare/coasta)"},
@@ -2086,8 +2090,12 @@ def compass(deg):
         return ""
     return _COMPASS[int((float(deg) % 360) / 45.0 + 0.5) % 8]
 
-# --- Wind profile by height (Open-Meteo gives 10/80/120/180 m) ---
+# --- Wind profile by height ---
+# Open-Meteo gives fixed heights above ground (10/80/120/180 m) and, for higher up,
+# pressure levels. Their real height varies with weather/terrain, so we read the
+# geopotential height and subtract the terrain elevation to get metres above ground.
 WIND_LEVELS = (10, 80, 120, 180)
+WIND_PLEVELS = (975, 950, 900, 850, 700)     # ≈ 300 m, 600 m, 1 km, 1.5 km, 3 km
 
 def cmd_wind(args, chat_id):
     """Wind speed/gusts/direction now and next hours, at several heights."""
@@ -2100,7 +2108,10 @@ def cmd_wind(args, chat_id):
     units = get_units(chat_id)
     model_id, model_label = MODELS.get(get_model(chat_id), MODELS[DEFAULT_MODEL])
     hourly = ",".join([f"wind_speed_{m}m" for m in WIND_LEVELS] +
-                      [f"wind_direction_{m}m" for m in WIND_LEVELS] + ["wind_gusts_10m"])
+                      [f"wind_direction_{m}m" for m in WIND_LEVELS] + ["wind_gusts_10m"] +
+                      [f"wind_speed_{p}hPa" for p in WIND_PLEVELS] +
+                      [f"wind_direction_{p}hPa" for p in WIND_PLEVELS] +
+                      [f"geopotential_height_{p}hPa" for p in WIND_PLEVELS])
     params = {"latitude": loc["lat"], "longitude": loc["lon"], "hourly": hourly,
               "forecast_days": 2, "timezone": "auto", "wind_speed_unit": units["wind"]}
     if model_id and model_id != "best_match":
@@ -2137,6 +2148,25 @@ def cmd_wind(args, chat_id):
     g = at("wind_gusts_10m", idx)
     if g is not None:
         lines.append(tr("wind_gust_now", lang, v=f"<b>{g:.0f} {wlab}</b>"))
+
+    # Higher up: pressure levels, converted to metres above ground level (AGL).
+    terrain = data.get("elevation")
+    plines = []
+    for p in WIND_PLEVELS:
+        sp = at(f"wind_speed_{p}hPa", idx)
+        if sp is None:
+            continue
+        dr = at(f"wind_direction_{p}hPa", idx)
+        gh = at(f"geopotential_height_{p}hPa", idx)
+        agl = (gh - terrain) if (gh is not None and isinstance(terrain, (int, float))) else None
+        if agl is not None and agl < 50:          # level is below/at the ground here
+            continue
+        hlabel = (f"~{agl:,.0f} m".replace(",", " ") if agl is not None else f"{p} hPa")
+        dr_s = f" {compass(dr)}" if dr is not None else ""
+        plines.append(f"  {hlabel} ({p} hPa): <b>{sp:.0f} {wlab}</b>{dr_s}")
+    if plines:
+        lines.append("\n" + tr("wind_upper_hdr", lang))
+        lines.extend(plines)
 
     lines.append("\n" + tr("wind_next_hdr", lang))
     for i in range(idx, min(idx + 12, len(times)), 3):   # every 3h, next ~12h
