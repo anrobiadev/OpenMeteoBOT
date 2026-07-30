@@ -427,6 +427,7 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `air Orsova` | Air quality — European AQI + PM2.5/PM10/O₃/NO₂/SO₂/CO + UV, each explained in plain language |
 | `flood Orsova [days]` | River-discharge (flood) forecast, GloFAS |
 | `wind Orsova` | Wind speed + direction at 10/80/120/180 m, plus higher levels (~300 m to ~3 km above ground, from pressure levels), gusts, and the next hours |
+| `wind Orsova drone` | Drone band: 250–800 m above ground, every 100 m (custom: `wind Orsova 300-600`) |
 | `marine Constanta` | Sea state — wave height/period/direction, swell, wind waves, sea-surface temperature |
 | `hist Orsova 2025-07-01 2025-07-10` | Past weather for a period |
 | `radar` | National radar image from ANM, over a faded map |

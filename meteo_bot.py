@@ -544,6 +544,17 @@ T = {
     "wind_gust_now": {"en": "  \U0001f4a8 gusts (10 m): {v}", "ro": "  \U0001f4a8 rafale (10 m): {v}"},
     "wind_upper_hdr": {"en": "<b>Higher up</b> (height above ground, from pressure levels):",
                        "ro": "<b>La inaltime</b> (metri deasupra solului, din nivele de presiune):"},
+    "wind_band_hdr": {"en": "<b>{a}–{b} m above ground</b> ({t}) — every 100 m:",
+                      "ro": "<b>{a}–{b} m deasupra solului</b> ({t}) — din 100 in 100 m:"},
+    "wind_band_none": {"en": "no data covering this height band right now",
+                       "ro": "fara date pentru acest interval de inaltime acum"},
+    "wind_band_note": {
+        "en": "Values are interpolated between the model levels (10–180 m and pressure levels), "
+              "on wind vectors. Gusts are measured at 10 m and can be stronger aloft — "
+              "always check local drone rules and the actual site conditions.",
+        "ro": "Valorile sunt interpolate intre nivelele modelului (10–180 m si nivele de presiune), "
+              "pe vectori de vant. Rafalele sunt masurate la 10 m si pot fi mai puternice in inaltime — "
+              "verifica intotdeauna reglementarile pentru drone si conditiile reale din teren."},
     "wind_next_hdr": {"en": "<b>Next hours (10 m)</b>:", "ro": "<b>Urmatoarele ore (10 m)</b>:"},
     "wind_legend": {
         "en": "Direction = where the wind comes FROM (NW = blows from north-west). "
@@ -2096,13 +2107,67 @@ def compass(deg):
 # geopotential height and subtract the terrain elevation to get metres above ground.
 WIND_LEVELS = (10, 80, 120, 180)
 WIND_PLEVELS = (975, 950, 900, 850, 700)     # ≈ 300 m, 600 m, 1 km, 1.5 km, 3 km
+DRONE_RANGE = (250, 800)                     # default band for `wind <loc> drone`
+DRONE_STEP = 100
+
+def _uv(speed, deg):
+    """Wind speed+direction (FROM, degrees) -> u,v vector components."""
+    r = math.radians(float(deg))
+    return -speed * math.sin(r), -speed * math.cos(r)
+
+def _from_uv(u, v):
+    """u,v -> (speed, direction FROM in degrees)."""
+    return math.hypot(u, v), (math.degrees(math.atan2(-u, -v)) % 360.0)
+
+def interp_wind_profile(levels, targets):
+    """Interpolate wind at `targets` (m above ground) from known (agl, speed, dir)
+    `levels`. Interpolation is done on u/v components — averaging degrees directly
+    would be wrong (e.g. 350° and 10°). Returns [(height, speed, dir)]."""
+    pts = sorted((h, s, d) for h, s, d in levels if h is not None and s is not None and d is not None)
+    if len(pts) < 2:
+        return []
+    out = []
+    for th in targets:
+        if th < pts[0][0] or th > pts[-1][0]:
+            continue                                  # don't extrapolate beyond data
+        lo = max((p for p in pts if p[0] <= th), key=lambda p: p[0])
+        hi = min((p for p in pts if p[0] >= th), key=lambda p: p[0])
+        if lo[0] == hi[0]:
+            sp, dr = lo[1], lo[2]
+        else:
+            f = (th - lo[0]) / float(hi[0] - lo[0])
+            u0, v0 = _uv(lo[1], lo[2])
+            u1, v1 = _uv(hi[1], hi[2])
+            sp, dr = _from_uv(u0 + (u1 - u0) * f, v0 + (v1 - v0) * f)
+        out.append((th, sp, dr))
+    return out
 
 def cmd_wind(args, chat_id):
-    """Wind speed/gusts/direction now and next hours, at several heights."""
+    """Wind speed/gusts/direction now and next hours, at several heights.
+    Optional band: `wind Orsova drone` or `wind Orsova 250-800` -> interpolated
+    profile every 100 m (useful for drone flight levels)."""
     lang = get_lang(chat_id)
     if not args:
         return tr("wind_usage", lang)
-    loc, err = find_location(" ".join(args), chat_id, lang)
+    toks = list(args)
+    band = None
+    if toks and toks[-1].lower() in ("drone", "drona", "dron"):
+        band = DRONE_RANGE
+        toks = toks[:-1]
+    else:                                   # trailing "250-800" or "250 800"
+        mt = re.match(r"^(\d{2,5})\s*-\s*(\d{2,5})$", toks[-1]) if toks else None
+        if mt:
+            band = (int(mt.group(1)), int(mt.group(2)))
+            toks = toks[:-1]
+        elif len(toks) >= 3 and toks[-1].isdigit() and toks[-2].isdigit():
+            band = (int(toks[-2]), int(toks[-1]))
+            toks = toks[:-2]
+    if band:
+        lo, hi = min(band), max(band)
+        band = (max(0, lo), min(hi, 12000))
+    if not toks:
+        return tr("wind_usage", lang)
+    loc, err = find_location(" ".join(toks), chat_id, lang)
     if err:
         return err
     units = get_units(chat_id)
@@ -2136,9 +2201,48 @@ def cmd_wind(args, chat_id):
         a = h.get(key)
         return a[i] if a and i < len(a) and a[i] is not None else None
 
+    # Known levels (height above ground -> speed, direction) for interpolation.
+    terrain = data.get("elevation")
+    known = []
+    for mlvl in WIND_LEVELS:
+        sp = at(f"wind_speed_{mlvl}m", idx)
+        dr = at(f"wind_direction_{mlvl}m", idx)
+        if sp is not None and dr is not None:
+            known.append((float(mlvl), sp, dr))
+    plevels = []                                   # (agl, speed, dir, hPa)
+    for p in WIND_PLEVELS:
+        sp = at(f"wind_speed_{p}hPa", idx)
+        dr = at(f"wind_direction_{p}hPa", idx)
+        gh = at(f"geopotential_height_{p}hPa", idx)
+        agl = (gh - terrain) if (gh is not None and isinstance(terrain, (int, float))) else None
+        if sp is None or (agl is not None and agl < 50):
+            continue
+        plevels.append((agl, sp, dr, p))
+        if agl is not None and dr is not None:
+            known.append((float(agl), sp, dr))
+
     lines = [f"\U0001f4cd <b>{loc_label(loc)}</b> — {tr('wind_title', lang)}",
-             tr("src_model", lang, model=model_label) + "\n",
-             tr("wind_now_hdr", lang, t=times[idx][-5:])]
+             tr("src_model", lang, model=model_label) + "\n"]
+
+    if band:                                       # drone band: every 100 m, interpolated
+        lo_b, hi_b = int(band[0]), int(band[1])
+        first = ((lo_b + DRONE_STEP - 1) // DRONE_STEP) * DRONE_STEP   # next round 100
+        targets = [lo_b] + [x for x in range(first, hi_b + 1, DRONE_STEP) if x > lo_b]
+        if hi_b not in targets:                    # always include the top of the band
+            targets.append(hi_b)
+        prof = interp_wind_profile(known, targets)
+        lines.append(tr("wind_band_hdr", lang, a=band[0], b=band[1], t=times[idx][-5:]))
+        if not prof:
+            lines.append("  " + tr("wind_band_none", lang))
+        for hgt, sp, dr in prof:
+            lines.append(f"  {hgt:>4} m: <b>{sp:.0f} {wlab}</b> {compass(dr)} ({round(dr)}°)")
+        g = at("wind_gusts_10m", idx)
+        if g is not None:
+            lines.append(tr("wind_gust_now", lang, v=f"<b>{g:.0f} {wlab}</b>"))
+        lines.append("\n<i>" + tr("wind_band_note", lang) + "</i>")
+        return "\n".join(lines)
+
+    lines.append(tr("wind_now_hdr", lang, t=times[idx][-5:]))
     for mlvl in WIND_LEVELS:                       # profile: speed + direction per height
         sp = at(f"wind_speed_{mlvl}m", idx)
         dr = at(f"wind_direction_{mlvl}m", idx)
@@ -2149,18 +2253,8 @@ def cmd_wind(args, chat_id):
     if g is not None:
         lines.append(tr("wind_gust_now", lang, v=f"<b>{g:.0f} {wlab}</b>"))
 
-    # Higher up: pressure levels, converted to metres above ground level (AGL).
-    terrain = data.get("elevation")
     plines = []
-    for p in WIND_PLEVELS:
-        sp = at(f"wind_speed_{p}hPa", idx)
-        if sp is None:
-            continue
-        dr = at(f"wind_direction_{p}hPa", idx)
-        gh = at(f"geopotential_height_{p}hPa", idx)
-        agl = (gh - terrain) if (gh is not None and isinstance(terrain, (int, float))) else None
-        if agl is not None and agl < 50:          # level is below/at the ground here
-            continue
+    for agl, sp, dr, p in plevels:
         hlabel = (f"~{agl:,.0f} m".replace(",", " ") if agl is not None else f"{p} hPa")
         dr_s = f" {compass(dr)}" if dr is not None else ""
         plines.append(f"  {hlabel} ({p} hPa): <b>{sp:.0f} {wlab}</b>{dr_s}")
@@ -2303,7 +2397,8 @@ HELP = {
         "<code>soil Orsova</code> \u2014 soil moisture + temperature now\n"
         "<code>air Orsova</code> \u2014 air quality (European AQI + pollutants)\n"
         "<code>flood Orsova</code> \u2014 river discharge forecast (GloFAS)\n"
-        "<code>wind Orsova</code> \u2014 wind speed &amp; direction at 10/80/120/180 m\n"
+        "<code>wind Orsova</code> \u2014 wind speed &amp; direction by height (10 m \u2026 ~3 km)\n"
+        "<code>wind Orsova drone</code> \u2014 250\u2013800 m every 100 m (or <code>wind Orsova 300-600</code>)\n"
         "<code>marine Constanta</code> \u2014 sea state: waves, swell, water temp\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 past weather for a period\n\n"
         "<b>Maps</b>\n"
@@ -2353,7 +2448,8 @@ HELP = {
         "<code>soil Orsova</code> \u2014 umiditatea solului + temperatura acum\n"
         "<code>air Orsova</code> \u2014 calitatea aerului (AQI european + poluanti)\n"
         "<code>flood Orsova</code> \u2014 prognoza debit rau (GloFAS)\n"
-        "<code>wind Orsova</code> \u2014 viteza si directia vantului la 10/80/120/180 m\n"
+        "<code>wind Orsova</code> \u2014 viteza si directia vantului pe inaltimi (10 m \u2026 ~3 km)\n"
+        "<code>wind Orsova drone</code> \u2014 250\u2013800 m din 100 in 100 (sau <code>wind Orsova 300-600</code>)\n"
         "<code>marine Constanta</code> \u2014 starea marii: valuri, hula, temp apa\n"
         "<code>hist Orsova 2025-07-01 2025-07-10</code> \u2014 vremea din trecut pe o perioada\n\n"
         "<b>Harti</b>\n"
