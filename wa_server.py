@@ -85,6 +85,8 @@ def alert_loop():
                 locations = cdata.get("locations", {})
                 if not locations:
                     continue
+                if not cdata.get("alerts_on", True):   # user paused automatic alerts
+                    continue
                 model_id, model_label = core.MODELS.get(
                     cdata.get("model", core.DEFAULT_MODEL), core.MODELS[core.DEFAULT_MODEL])
                 thr = core.get_thresholds(chat_id)

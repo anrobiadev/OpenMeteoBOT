@@ -443,10 +443,15 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `locs` | List saved locations |
 | `del 1` | Delete the location in slot 1 |
 | `alerts` | Check saved locations now |
+| `alerts off` / `alerts on` | Pause or resume automatic alerts (saved locations are kept) |
 | `set gust 70` | Adjust alert thresholds |
 | `units temp F` | Set units (temp/wind/rain/pressure) |
 | `lang ro` / `lang en` | Switch language (auto-detected from the phone on Telegram) |
 | `anm nowcasting,general` / `anm off` | Official ANM warnings by exact point (nowcasting and/or county-level) |
+
+You can pause the automatic alerts per chat with **`alerts off`** (and resume with
+`alerts on`) — your saved locations, thresholds and alarms stay untouched, and
+`alerts` still runs an on-demand check. The current state is shown by `status`.
 
 Alerts for saved locations are sent **automatically** (checked every 15 min by
 default; change it live with `interval 10` — minutes — or the `TG_ALERT_INTERVAL`

@@ -259,6 +259,15 @@ def set_map_cfg(chat_id, key, value):
         state.setdefault(str(chat_id), {}).setdefault("map", {})[key] = value
     update_state(m)
 
+# --- Automatic alerts on/off, per chat (saved locations are kept either way) ---
+def get_alerts_enabled(chat_id):
+    return load_state().get(str(chat_id), {}).get("alerts_on", True)
+
+def set_alerts_enabled(chat_id, on):
+    def m(state):
+        state.setdefault(str(chat_id), {})["alerts_on"] = bool(on)
+    update_state(m)
+
 def reset_map_cfg(chat_id):
     def m(state):
         state.setdefault(str(chat_id), {}).pop("map", None)
@@ -426,6 +435,17 @@ T = {
     "del_missing": {"en": "Slot {slot} not found.", "ro": "Slotul {slot} nu exista."},
     # alerts (manual check)
     "alerts_nothing": {"en": "nothing in next {h}h", "ro": "nimic in urmatoarele {h}h"},
+    "alerts_off_set": {
+        "en": "🔕 Automatic alerts <b>paused</b>. Saved locations are kept — you can still "
+              "check anytime with <code>alerts</code>. Resume with <code>alerts on</code>.",
+        "ro": "🔕 Alertele automate au fost <b>oprite</b>. Locatiile salvate raman — poti verifica "
+              "oricand cu <code>alerts</code>. Reporneste cu <code>alerts on</code>."},
+    "alerts_on_set": {"en": "🔔 Automatic alerts <b>resumed</b>.", "ro": "🔔 Alertele automate au fost <b>repornite</b>."},
+    "alerts_state_on": {"en": "🔔 Automatic alerts: <b>on</b>", "ro": "🔔 Alerte automate: <b>pornite</b>"},
+    "alerts_state_off": {"en": "🔕 Automatic alerts: <b>paused</b> (<code>alerts on</code> to resume)",
+                         "ro": "🔕 Alerte automate: <b>oprite</b> (<code>alerts on</code> pentru repornire)"},
+    "alerts_paused_note": {"en": "🔕 <i>Automatic alerts are paused — this was a manual check.</i>",
+                           "ro": "🔕 <i>Alertele automate sunt oprite — aceasta a fost o verificare manuala.</i>"},
     "fetch_error": {"en": "fetch error", "ro": "eroare la preluare"},
     # alert message (proactive)
     "alert_header": {"en": "ALERT \u2014 {loc}", "ro": "ALERTA \u2014 {loc}"},
@@ -1869,6 +1889,18 @@ def cmd_del(args, chat_id):
 
 def cmd_alerts(args, chat_id):
     lang = get_lang(chat_id)
+    # `alerts off` / `alerts on` pause or resume the automatic checks for this chat
+    # (saved locations are kept). `alerts` with no argument still checks right now.
+    if args:
+        a0 = args[0].lower()
+        if a0 in ("off", "stop", "oprit", "pause"):
+            set_alerts_enabled(chat_id, False)
+            return tr("alerts_off_set", lang)
+        if a0 in ("on", "start", "pornit", "resume"):
+            set_alerts_enabled(chat_id, True)
+            return tr("alerts_on_set", lang)
+        if a0 in ("status", "stare"):
+            return tr("alerts_state_on" if get_alerts_enabled(chat_id) else "alerts_state_off", lang)
     cdata = load_state().get(str(chat_id), {})
     locations = cdata.get("locations", {})
     if not locations:
@@ -1892,7 +1924,10 @@ def cmd_alerts(args, chat_id):
             for p, (val, tstr) in active.items():
                 block.append("  " + format_alert_line(p, val, tstr, lang))
             out.append("\n".join(block))
-    return "\n\n".join(out) + "\n\n" + tr("src_model", lang, model=model_label)
+    tail = "\n\n" + tr("src_model", lang, model=model_label)
+    if not get_alerts_enabled(chat_id):        # manual check still works when paused
+        tail += "\n" + tr("alerts_paused_note", lang)
+    return "\n\n".join(out) + tail
 
 def cmd_set(args, chat_id):
     lang = get_lang(chat_id)
@@ -2417,6 +2452,7 @@ HELP = {
         "You can type part of a saved name: <code>clad</code> \u2192 Cladova\n\n"
         "<b>Alerts</b>\n"
         "<code>alerts</code> \u2014 check saved locations now and report\n"
+        "<code>alerts off</code> / <code>alerts on</code> \u2014 pause or resume automatic alerts\n"
         "<code>set</code> \u2014 show current alert thresholds\n"
         "<code>set gust 70</code> \u2014 change a threshold "
         "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n"
@@ -2468,6 +2504,7 @@ HELP = {
         "Poti scrie o parte din nume: <code>clad</code> \u2192 Cladova\n\n"
         "<b>Alerte</b>\n"
         "<code>alerts</code> \u2014 verifica acum locatiile salvate\n"
+        "<code>alerts off</code> / <code>alerts on</code> \u2014 opreste sau reporneste alertele automate\n"
         "<code>set</code> \u2014 arata pragurile de alerta curente\n"
         "<code>set gust 70</code> \u2014 schimba un prag "
         "(gust km/h, rain mm/h, snow cm/h, heat \u00b0C, frost \u00b0C)\n"
@@ -2841,6 +2878,7 @@ def cmd_status(args, chat_id):
         tr("sys_core", lang),
         f"\U0001f4f1 {wa}",
         tr("sys_interval", lang, m=get_alert_interval() // 60),
+        tr("alerts_state_on" if get_alerts_enabled(chat_id) else "alerts_state_off", lang),
         tr("sys_anm", lang, feeds=feeds_s),
         tr("sys_chat", lang, n=nloc, a=len(alarms), tz=tzc),
     ]
@@ -2999,6 +3037,8 @@ def alert_loop():
             for chat_id, cdata in state.items():
                 locations = cdata.get("locations", {})
                 if not locations:
+                    continue
+                if not cdata.get("alerts_on", True):   # user paused automatic alerts
                     continue
                 model_id, model_label = MODELS.get(
                     cdata.get("model", DEFAULT_MODEL), MODELS[DEFAULT_MODEL])
