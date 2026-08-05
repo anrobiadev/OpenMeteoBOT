@@ -153,16 +153,44 @@ DEFAULT_THRESHOLDS = {
 THRESH_UNIT = {"gust": "km/h", "rain": "mm/h", "snow": "cm/h", "heat": "\u00b0C", "frost": "\u00b0C"}
 
 # --- Open-Meteo models: short name -> (API id, description) ---
+# Weather models available through the Open-Meteo Forecast API (`models=` parameter).
+# Grouped global -> European/regional -> other continents. Any model id not listed
+# here can still be used directly, e.g. `model chmi_aladin_cz_1km`.
 MODELS = {
     "auto":   ("best_match",           "Auto (Open-Meteo picks the best model per location)"),
-    "icon":   ("icon_seamless",        "DWD ICON seamless (falls back to ICON-EU here)"),
-    "iconeu": ("icon_eu",              "DWD ICON-EU 7 km - covers Romania"),
+    # --- global ---
+    "icon":   ("icon_seamless",        "DWD ICON seamless (global + EU + D2)"),
+    "icong":  ("icon_global",          "DWD ICON global 11 km"),
     "ecmwf":  ("ecmwf_ifs025",         "ECMWF IFS 0.25 deg"),
-    "gfs":    ("gfs_seamless",         "NOAA GFS"),
-    "arpege": ("meteofrance_seamless", "Meteo-France ARPEGE/AROME"),
-    "ukmo":   ("ukmo_seamless",        "UK Met Office"),
-    "gem":    ("gem_seamless",         "Canada GEM"),
-    "jma":    ("jma_seamless",         "Japan JMA"),
+    "aifs":   ("ecmwf_aifs025",        "ECMWF AIFS 0.25 deg (AI model)"),
+    "gfs":    ("gfs_seamless",         "NOAA GFS seamless"),
+    "gfsg":   ("gfs_global",           "NOAA GFS global 0.11 deg"),
+    "ukmo":   ("ukmo_seamless",        "UK Met Office seamless"),
+    "ukmog":  ("ukmo_global_deterministic_10km", "UK Met Office global 10 km"),
+    "gem":    ("gem_seamless",         "Canada GEM seamless"),
+    "jma":    ("jma_seamless",         "Japan JMA seamless"),
+    "kma":    ("kma_seamless",         "KMA Korea seamless"),
+    "cma":    ("cma_grapes_global",    "CMA China GRAPES global"),
+    "bom":    ("bom_access_global",    "BOM Australia ACCESS global"),
+    "meteofrance": ("meteofrance_seamless", "Meteo-France seamless (ARPEGE + AROME)"),
+    # --- Europe / regional (higher resolution) ---
+    "iconeu": ("icon_eu",              "DWD ICON-EU 7 km - covers Romania"),
+    "icond2": ("icon_d2",              "DWD ICON-D2 2 km - central Europe"),
+    "arpege": ("meteofrance_arpege_europe", "Meteo-France ARPEGE Europe 11 km"),
+    "arome":  ("meteofrance_arome_france_hd", "Meteo-France AROME France 1.5 km"),
+    "aladin": ("chmi_aladin_central_europe_2km", "CHMI ALADIN Central Europe 2 km"),
+    "aladincz": ("chmi_aladin_cz_1km", "CHMI ALADIN Czechia 1 km"),
+    "aladinseam": ("chmi_aladin_seamless", "CHMI ALADIN seamless"),
+    "swiss":  ("meteoswiss_icon_ch1",  "MeteoSwiss ICON-CH1 1 km (Alps)"),
+    "swiss2": ("meteoswiss_icon_ch2",  "MeteoSwiss ICON-CH2 2 km (Alps)"),
+    "metno":  ("metno_seamless",       "MET Norway seamless (Nordics)"),
+    "knmi":   ("knmi_seamless",        "KNMI Netherlands seamless (HARMONIE)"),
+    "dmi":    ("dmi_seamless",         "DMI Denmark seamless (HARMONIE)"),
+    "arpae":  ("italia_meteo_arpae_icon_2i", "ItaliaMeteo ARPAE ICON-2I 2 km"),
+    "austria": ("geosphere_seamless",  "GeoSphere Austria seamless (AROME)"),
+    # --- North America / other high-res ---
+    "hrrr":   ("gfs_hrrr",             "NOAA HRRR 3 km (USA)"),
+    "gemhr":  ("gem_hrdps_continental", "Canada HRDPS 2.5 km"),
 }
 DEFAULT_MODEL = "auto"
 
@@ -351,7 +379,15 @@ MODEL_DESC_RO = {
 def model_desc(key, lang):
     if lang == "ro" and key in MODEL_DESC_RO:
         return MODEL_DESC_RO[key]
-    return MODELS.get(key, (None, ""))[1]
+    return MODELS.get(key, (None, key))[1]
+
+def resolve_model(key):
+    """(api_model_id, label) for a shortcut from MODELS, or a raw Open-Meteo id."""
+    if key in MODELS:
+        return MODELS[key]
+    if key and re.fullmatch(r"[a-z0-9]+(_[a-z0-9]+)+", str(key)):
+        return (key, key)                       # raw id typed by the user
+    return MODELS[DEFAULT_MODEL]
 
 WEEKDAYS_LANG = {
     "en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
@@ -641,6 +677,9 @@ T = {
     "map_src": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_radar": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_anm": {"en": "source: meteoromania.ro (ANM), \u00a9 OpenStreetMap", "ro": "sursa: meteoromania.ro (ANM), \u00a9 OpenStreetMap"},
+    "model_set_raw": {
+        "en": "Model set to <b>{k}</b> (raw Open-Meteo id). If the API rejects it, the id is wrong.",
+        "ro": "Model setat: <b>{k}</b> (id Open-Meteo direct). Daca API-ul il refuza, id-ul e gresit."},
     "cap_heat": {"en": "Temperature map", "ro": "Harta temperaturilor"},
     "cap_sat_low": {"en": "Low cloud cover", "ro": "Nori jos"},
     "cap_sat_mid": {"en": "Mid-level cloud cover", "ro": "Nori la nivel mediu"},
@@ -2038,7 +2077,7 @@ def cmd_wx(args, chat_id):
     if not args:
         return tr("wx_usage", lang)
     units = get_units(chat_id)
-    model_id, model_label = MODELS.get(get_model(chat_id), MODELS[DEFAULT_MODEL])
+    model_id, model_label = resolve_model(get_model(chat_id))
     toks = list(args)
 
     # trailing number = day count (1..16)
@@ -2083,7 +2122,12 @@ def cmd_model(args, chat_id):
         return "\n".join(lines)
     key = args[0].lower()
     if key not in MODELS:
-        return tr("model_unknown", lang, k=key, opts=", ".join(MODELS.keys()))
+        # Accept any raw Open-Meteo model id too (e.g. chmi_aladin_cz_1km), so new
+        # models work without a bot update. Looks like an id -> pass it through.
+        if re.fullmatch(r"[a-z0-9]+(_[a-z0-9]+)+", key):
+            set_model(chat_id, key)
+            return tr("model_set_raw", lang, k=key)
+        return tr("model_unknown", lang, k=key, opts=", ".join(list(MODELS.keys())[:12]) + ", …")
     set_model(chat_id, key)
     return tr("model_set", lang, k=key, desc=model_desc(key, lang))
 
@@ -2153,7 +2197,7 @@ def cmd_alerts(args, chat_id):
     locations = cdata.get("locations", {})
     if not locations:
         return tr("no_saved_add", lang)
-    model_id, model_label = MODELS.get(cdata.get("model", DEFAULT_MODEL), MODELS[DEFAULT_MODEL])
+    model_id, model_label = resolve_model(cdata.get("model", DEFAULT_MODEL))
     thr = get_thresholds(chat_id)
     out = []
     for slot in sorted(locations, key=int):
@@ -2239,7 +2283,7 @@ def cmd_soil(args, chat_id):
     loc, err = find_location(" ".join(args), chat_id, lang)
     if err:
         return err
-    model_id = MODELS.get(get_model(chat_id), MODELS[DEFAULT_MODEL])[0]
+    model_id = resolve_model(get_model(chat_id))[0]
     data = fetch_soil(loc["lat"], loc["lon"], model_id)
     h = data.get("hourly", {})
     times = h.get("time", [])
@@ -2454,7 +2498,7 @@ def cmd_wind(args, chat_id):
     if err:
         return err
     units = get_units(chat_id)
-    model_id, model_label = MODELS.get(get_model(chat_id), MODELS[DEFAULT_MODEL])
+    model_id, model_label = resolve_model(get_model(chat_id))
     hourly = ",".join([f"wind_speed_{m}m" for m in WIND_LEVELS] +
                       [f"wind_direction_{m}m" for m in WIND_LEVELS] + ["wind_gusts_10m"] +
                       [f"wind_speed_{p}hPa" for p in WIND_PLEVELS] +
@@ -2873,7 +2917,7 @@ def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=Non
                                 cloud_alpha=cfg["cloud_alpha"], tz=cfg.get("tz", ""),
                                 legend=bar, cloud_var=cloud_var, when=when,
                                 theme=cfg.get("theme", MAP_THEME_DEFAULT),
-                                model_id=MODELS.get(get_model(chat_id), MODELS[DEFAULT_MODEL])[0])
+                                model_id=resolve_model(get_model(chat_id))[0])
     except Exception as e:
         return tr("err_generic", lang, e=e)
     if not png:
@@ -3100,7 +3144,7 @@ def collect_due_alarms(now=None):
         fired = cdata.get("alarms_fired", {})
         units = get_units(chat_id)
         lang = get_lang(chat_id)
-        model_id, model_label = MODELS.get(cdata.get("model", DEFAULT_MODEL), MODELS[DEFAULT_MODEL])
+        model_id, model_label = resolve_model(cdata.get("model", DEFAULT_MODEL))
         for slot, t in alarms.items():
             if t != hhmm or fired.get(slot) == today:
                 continue

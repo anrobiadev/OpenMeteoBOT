@@ -442,7 +442,9 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `interval 10` | Set how often alerts are checked, in minutes (global) |
 | `status` | Health report: bot core, WhatsApp link, interval, this chat's settings |
 | `restart <system password>` | Restart all services (uses your system password via sudo; nothing stored) |
-| `model` / `model iconeu` | Show / set the weather model |
+| `model` / `model iconeu` | Show / set the weather model (~30 models: global, European and local high-res) |
+| `model aladin` | e.g. CHMI ALADIN Central Europe 2 km; also `icond2`, `arome`, `swiss`, `hrrr`, `knmi`, `dmi`, `arpae`, `austria`… |
+| `model chmi_aladin_cz_1km` | Any raw Open-Meteo model id works too, so new models need no bot update |
 | `save 1 Orsova` | Save a location in slot 1 |
 | `locs` | List saved locations |
 | `del 1` | Delete the location in slot 1 |
