@@ -477,9 +477,11 @@ resent on every cycle.
   free RainViewer tier has no satellite, so cloud cover is used instead.
 - **`map Orsova`** overlays clouds + radar on one image.
 - **`heat Orsova`** (aliases `temp`, `caldura`) samples Open-Meteo's 2 m temperature
-  over the map area and colours it. The palette is **absolute** (the same shade always
-  means the same temperature) and a gradient scale with °C/°F ticks — following your
-  unit setting — is drawn under the map.
+  over the map area and colours it with **Open-Meteo's own official temperature scale**
+  — the same breakpoint palette used on [maps.open-meteo.com](https://maps.open-meteo.com).
+  The scale (with °C/°F ticks following your unit setting) is drawn under the map.
+  Note: Open-Meteo renders its maps client-side from binary `.om` files, so there are
+  no ready-made tiles to fetch; the field is sampled from the API and rendered here.
 - **`mapset`** (alias `hartaset`) tunes the maps per chat and persists it:
 
   | Setting | Example | Meaning |

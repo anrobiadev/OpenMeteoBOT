@@ -641,18 +641,20 @@ T = {
     "map_src_radar": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_anm": {"en": "source: meteoromania.ro (ANM), \u00a9 OpenStreetMap", "ro": "sursa: meteoromania.ro (ANM), \u00a9 OpenStreetMap"},
     "cap_heat": {"en": "Temperature map", "ro": "Harta temperaturilor"},
-    "heat_bar_title": {"en": "Air temperature at 2 m ({u}) — Open-Meteo",
-                       "ro": "Temperatura aerului la 2 m ({u}) — Open-Meteo"},
+    "heat_bar_title": {"en": "Air temperature 2 m ({u}) — Open-Meteo scale",
+                       "ro": "Temperatura aerului 2 m ({u}) — scara Open-Meteo"},
     "heat_legend": {
-        "en": ("<b>Colour scale</b> (bottom of the image) — air temperature at 2 m:\n"
-               "purple/blue = freezing and cold · cyan/green = cool · yellow = mild · "
-               "orange/red = hot · dark red/magenta = extreme heat.\n"
-               "<i>Colours are absolute, so the same shade always means the same temperature; "
+        "en": ("<b>Colour scale</b> (bottom of the image) — Open-Meteo's official temperature "
+               "scale, the same one used on maps.open-meteo.com:\n"
+               "violet/blue = frost and cold · light blue → green = cool to mild · "
+               "yellow/orange = warm · red = hot · dark red = extreme heat.\n"
+               "<i>Fixed steps, so the same shade always means the same temperature; "
                "the bar covers the range present on this map.</i>"),
-        "ro": ("<b>Scara de culori</b> (jos in imagine) — temperatura aerului la 2 m:\n"
-               "mov/albastru = inghet si frig · cyan/verde = racoare · galben = bland · "
-               "portocaliu/rosu = cald · rosu inchis/magenta = canicula.\n"
-               "<i>Culorile sunt absolute, deci aceeasi nuanta inseamna mereu aceeasi temperatura; "
+        "ro": ("<b>Scara de culori</b> (jos in imagine) — scara oficiala de temperatura "
+               "Open-Meteo, aceeasi folosita pe maps.open-meteo.com:\n"
+               "violet/albastru = inghet si frig · albastru deschis → verde = racoare spre bland · "
+               "galben/portocaliu = cald · rosu = foarte cald · rosu inchis = canicula.\n"
+               "<i>Praguri fixe, deci aceeasi nuanta inseamna mereu aceeasi temperatura; "
                "bara acopera intervalul prezent pe aceasta harta.</i>"),
     },
     "rv_bar_title": {"en": "Radar reflectivity dBZ — RainViewer (Universal Blue)",
@@ -1470,29 +1472,39 @@ def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None):
 
 # --- Temperature map (Open-Meteo temperature_2m sampled on a grid) ---------------
 # Open-Meteo serves no map tiles, so we sample the field and colour it ourselves.
-# Absolute palette (°C) so the same colour always means the same temperature.
-TEMP_STOPS = (
-    (-30, (70, 0, 100)), (-20, (85, 25, 165)), (-10, (35, 85, 220)),
-    (0, (0, 170, 230)), (5, (0, 200, 165)), (10, (60, 200, 60)),
-    (15, (170, 220, 45)), (20, (250, 230, 45)), (25, (250, 170, 30)),
-    (30, (240, 95, 30)), (35, (215, 25, 25)), (40, (150, 10, 60)),
-    (45, (205, 45, 165)),
+# Open-Meteo's OFFICIAL temperature colour scale (the one maps.open-meteo.com uses),
+# taken from @openmeteo/weather-map-layer. It is a *breakpoint* (step) scale: a value
+# takes the colour of the last breakpoint <= value.
+OM_TEMP_BREAKS = (
+    -80, -60, -50, -40, -37.5, -35, -32.5, -30, -27.5, -25, -22.5, -20, -17.5, -15,
+    -12.5, -10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26,
+    28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50,
+)
+OM_TEMP_COLORS = (
+    (26, 242, 221), (22, 147, 178), (23, 101, 143), (47, 17, 189), (86, 15, 201),
+    (131, 13, 213), (181, 10, 226), (239, 7, 239), (206, 6, 241), (171, 5, 243),
+    (136, 4, 245), (100, 4, 247), (64, 3, 249), (26, 2, 251), (1, 14, 253),
+    (0, 52, 255), (35, 110, 251), (69, 156, 247), (102, 192, 245), (134, 219, 245),
+    (124, 245, 124), (90, 244, 90), (56, 244, 56), (21, 245, 21), (7, 224, 7),
+    (4, 193, 4), (2, 161, 2), (0, 128, 0), (57, 170, 0), (142, 213, 0),
+    (255, 255, 0), (255, 233, 0), (255, 210, 0), (255, 188, 0), (255, 165, 0),
+    (255, 141, 0), (255, 118, 0), (255, 94, 0), (255, 71, 0), (255, 47, 0),
+    (255, 24, 0), (255, 0, 0), (228, 0, 10), (201, 0, 18), (174, 0, 23), (147, 0, 26),
 )
 TEMP_COLS = int(os.environ.get("TG_TEMP_COLS", "16"))
 TEMP_ROWS = int(os.environ.get("TG_TEMP_ROWS", "14"))
 TEMP_ALPHA = int(os.environ.get("TG_TEMP_ALPHA", "170"))   # let the map show through
 
 def temp_color(c):
-    """Temperature in °C -> RGB, interpolated between the palette stops."""
-    if c <= TEMP_STOPS[0][0]:
-        return TEMP_STOPS[0][1]
-    if c >= TEMP_STOPS[-1][0]:
-        return TEMP_STOPS[-1][1]
-    for (t0, c0), (t1, c1) in zip(TEMP_STOPS, TEMP_STOPS[1:]):
-        if t0 <= c <= t1:
-            f = (c - t0) / float(t1 - t0)
-            return tuple(int(round(a + (b - a) * f)) for a, b in zip(c0, c1))
-    return TEMP_STOPS[-1][1]
+    """Temperature in °C -> RGB, using Open-Meteo's official breakpoint scale
+    (colour of the last breakpoint <= value), same as maps.open-meteo.com."""
+    idx = 0
+    for i, b in enumerate(OM_TEMP_BREAKS):
+        if c >= b:
+            idx = i
+        else:
+            break
+    return OM_TEMP_COLORS[idx]
 
 def _temp_overlay(bbox, w, h, alpha=None):
     """Temperature field over bbox=(latN, lonW, latS, lonE).
