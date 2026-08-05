@@ -432,6 +432,7 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `hist Orsova 2025-07-01 2025-07-10` | Past weather for a period |
 | `radar` | National radar image from ANM, over a faded map |
 | `sat Orsova` | Cloud cover (Open-Meteo) over a faded map |
+| `heat Orsova` | Temperature map (Open-Meteo) with a °C/°F colour scale on the image |
 | `map Orsova` | Clouds + radar combined |
 | `mapset` | Map settings (radar source, dim, cloud colour/opacity, zoom, time zone) |
 | `alarm 1 21:05` / `alarm off` | Daily 24h forecast for a saved slot at a set time |
@@ -475,6 +476,10 @@ resent on every cycle.
 - **`sat Orsova`** shows **cloud cover** from Open-Meteo (grey = cloudier). The
   free RainViewer tier has no satellite, so cloud cover is used instead.
 - **`map Orsova`** overlays clouds + radar on one image.
+- **`heat Orsova`** (aliases `temp`, `caldura`) samples Open-Meteo's 2 m temperature
+  over the map area and colours it. The palette is **absolute** (the same shade always
+  means the same temperature) and a gradient scale with °C/°F ticks — following your
+  unit setting — is drawn under the map.
 - **`mapset`** (alias `hartaset`) tunes the maps per chat and persists it:
 
   | Setting | Example | Meaning |

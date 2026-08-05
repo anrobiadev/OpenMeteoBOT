@@ -640,6 +640,21 @@ T = {
     "map_src": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_radar": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_anm": {"en": "source: meteoromania.ro (ANM), \u00a9 OpenStreetMap", "ro": "sursa: meteoromania.ro (ANM), \u00a9 OpenStreetMap"},
+    "cap_heat": {"en": "Temperature map", "ro": "Harta temperaturilor"},
+    "heat_bar_title": {"en": "Air temperature at 2 m ({u}) — Open-Meteo",
+                       "ro": "Temperatura aerului la 2 m ({u}) — Open-Meteo"},
+    "heat_legend": {
+        "en": ("<b>Colour scale</b> (bottom of the image) — air temperature at 2 m:\n"
+               "purple/blue = freezing and cold · cyan/green = cool · yellow = mild · "
+               "orange/red = hot · dark red/magenta = extreme heat.\n"
+               "<i>Colours are absolute, so the same shade always means the same temperature; "
+               "the bar covers the range present on this map.</i>"),
+        "ro": ("<b>Scara de culori</b> (jos in imagine) — temperatura aerului la 2 m:\n"
+               "mov/albastru = inghet si frig · cyan/verde = racoare · galben = bland · "
+               "portocaliu/rosu = cald · rosu inchis/magenta = canicula.\n"
+               "<i>Culorile sunt absolute, deci aceeasi nuanta inseamna mereu aceeasi temperatura; "
+               "bara acopera intervalul prezent pe aceasta harta.</i>"),
+    },
     "rv_bar_title": {"en": "Radar reflectivity dBZ — RainViewer (Universal Blue)",
                      "ro": "Reflectivitate radar dBZ — RainViewer (Universal Blue)"},
     "rv_bar_left": {"en": "light rain", "ro": "ploaie slaba"},
@@ -1453,6 +1468,73 @@ def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None):
     overlay = grid.resize((w, h), Image.BICUBIC)                 # smooth field
     return overlay, tstamp                                       # ISO time (UTC) or ''
 
+# --- Temperature map (Open-Meteo temperature_2m sampled on a grid) ---------------
+# Open-Meteo serves no map tiles, so we sample the field and colour it ourselves.
+# Absolute palette (°C) so the same colour always means the same temperature.
+TEMP_STOPS = (
+    (-30, (70, 0, 100)), (-20, (85, 25, 165)), (-10, (35, 85, 220)),
+    (0, (0, 170, 230)), (5, (0, 200, 165)), (10, (60, 200, 60)),
+    (15, (170, 220, 45)), (20, (250, 230, 45)), (25, (250, 170, 30)),
+    (30, (240, 95, 30)), (35, (215, 25, 25)), (40, (150, 10, 60)),
+    (45, (205, 45, 165)),
+)
+TEMP_COLS = int(os.environ.get("TG_TEMP_COLS", "16"))
+TEMP_ROWS = int(os.environ.get("TG_TEMP_ROWS", "14"))
+TEMP_ALPHA = int(os.environ.get("TG_TEMP_ALPHA", "170"))   # let the map show through
+
+def temp_color(c):
+    """Temperature in °C -> RGB, interpolated between the palette stops."""
+    if c <= TEMP_STOPS[0][0]:
+        return TEMP_STOPS[0][1]
+    if c >= TEMP_STOPS[-1][0]:
+        return TEMP_STOPS[-1][1]
+    for (t0, c0), (t1, c1) in zip(TEMP_STOPS, TEMP_STOPS[1:]):
+        if t0 <= c <= t1:
+            f = (c - t0) / float(t1 - t0)
+            return tuple(int(round(a + (b - a) * f)) for a, b in zip(c0, c1))
+    return TEMP_STOPS[-1][1]
+
+def _temp_overlay(bbox, w, h, alpha=None):
+    """Temperature field over bbox=(latN, lonW, latS, lonE).
+    Returns (RGBA_overlay, iso_time, min_C, max_C) or (None, '', None, None)."""
+    alpha = TEMP_ALPHA if alpha is None else alpha
+    latN, lonW, latS, lonE = bbox
+    lats, lons = [], []
+    for r in range(TEMP_ROWS):
+        lat = latN + (latS - latN) * (r + 0.5) / TEMP_ROWS       # row 0 = north (top)
+        for c in range(TEMP_COLS):
+            lon = lonW + (lonE - lonW) * (c + 0.5) / TEMP_COLS
+            lats.append(round(lat, 4)); lons.append(round(lon, 4))
+    try:
+        rr = requests.get(CLOUD_URL, params={
+            "latitude": ",".join(map(str, lats)),
+            "longitude": ",".join(map(str, lons)),
+            "current": "temperature_2m", "timezone": "UTC",
+        }, timeout=25, headers=_TILE_UA)
+        rr.raise_for_status()
+        data = rr.json()
+    except (requests.RequestException, ValueError):
+        return None, "", None, None
+    results = data if isinstance(data, list) else [data]
+    grid = Image.new("RGBA", (TEMP_COLS, TEMP_ROWS), (0, 0, 0, 0))
+    px = grid.load()
+    tstamp = ""
+    vals = []
+    for i, res in enumerate(results):
+        cur = res.get("current", {}) if isinstance(res, dict) else {}
+        if not tstamp:
+            tstamp = cur.get("time", "")
+        t = cur.get("temperature_2m")
+        c, row = i % TEMP_COLS, i // TEMP_COLS
+        if t is None or row >= TEMP_ROWS:
+            continue
+        vals.append(float(t))
+        px[c, row] = temp_color(float(t)) + (alpha,)
+    if not vals:
+        return None, "", None, None
+    overlay = grid.resize((w, h), Image.BICUBIC)                  # smooth field
+    return overlay, tstamp, min(vals), max(vals)
+
 # --- Legend bar built from RainViewer's OFFICIAL colour table --------------------
 # Scheme 2 "Universal Blue" (the only one the public API serves), rain colours for
 # dBZ 15..65, taken from rainviewer.com/api/color-schemes.html (colour table CSV).
@@ -1528,6 +1610,45 @@ def _legend_bar(width, left_label, right_label, title, height=24):
     d.text((pad + bar_w - tw, ty2), right_label, fill=(40, 40, 40, 255), font=small)
     return img
 
+def _temp_bar(width, vmin_c, vmax_c, title, unit="C", height=24):
+    """Smooth temperature gradient bar with tick labels in the user's unit."""
+    pad = 10
+    font = _load_font(13)
+    small = _load_font(11)
+    # widen a little so the range reads nicely, then snap to 5° steps
+    lo = math.floor((vmin_c - 1) / 5.0) * 5
+    hi = math.ceil((vmax_c + 1) / 5.0) * 5
+    if hi - lo < 10:
+        hi = lo + 10
+    title_h = 18
+    img = Image.new("RGBA", (width, title_h + height + 34), (255, 255, 255, 255))
+    d = ImageDraw.Draw(img)
+    d.text((pad, 2), title, fill=(30, 30, 30, 255), font=font)
+    bar_w = width - 2 * pad
+    y0 = title_h + 2
+    for x in range(bar_w):                       # smooth gradient, 1px columns
+        c = lo + (hi - lo) * (x / float(max(1, bar_w - 1)))
+        d.line([pad + x, y0, pad + x, y0 + height], fill=temp_color(c) + (255,))
+    d.rectangle([pad, y0, pad + bar_w, y0 + height], outline=(90, 90, 90, 255), width=1)
+
+    step = 5 if (hi - lo) <= 40 else 10
+    ty = y0 + height + 4
+    t = lo
+    while t <= hi:
+        frac = (t - lo) / float(hi - lo)
+        x = pad + frac * bar_w
+        d.line([x, y0 + height, x, y0 + height + 3], fill=(90, 90, 90, 255), width=1)
+        shown = t if unit == "C" else t * 9.0 / 5.0 + 32.0
+        txt = f"{shown:.0f}"
+        try:
+            tw = d.textlength(txt, font=small)
+        except Exception:
+            tw = 6 * len(txt)
+        d.text((min(max(pad, x - tw / 2), pad + bar_w - tw), ty), txt,
+               fill=(40, 40, 40, 255), font=small)
+        t += step
+    return img
+
 def _stack_below(base, strip):
     """Return base with `strip` appended underneath (same width)."""
     bw, bh = base.size
@@ -1587,7 +1708,21 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
     if base_dim > 0:                                  # fade the base map
         canvas.alpha_composite(Image.new("RGBA", (w, h), (255, 255, 255, int(255 * min(1.0, base_dim)))))
     src_dt = None                                     # UTC datetime of the freshest layer
+    trange = None                                     # (min_C, max_C) for the heat legend
     for layer in layers:
+        if layer == "heat":
+            latN, lonW = tilexy_to_lonlat(left / TILE, top / TILE, z)
+            latS, lonE = tilexy_to_lonlat((left + w) / TILE, (top + h) / TILE, z)
+            overlay, tlabel_iso, tmin, tmax = _temp_overlay((latN, lonW, latS, lonE), w, h)
+            if overlay is not None:
+                canvas.alpha_composite(overlay)
+                trange = (tmin, tmax)
+                if tlabel_iso and src_dt is None:
+                    try:
+                        src_dt = datetime.fromisoformat(tlabel_iso).replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        pass
+            continue
         if layer == "clouds":
             latN, lonW = tilexy_to_lonlat(left / TILE, top / TILE, z)
             latS, lonE = tilexy_to_lonlat((left + w) / TILE, (top + h) / TILE, z)
@@ -1613,7 +1748,13 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
     d.ellipse([mx - 7, my - 7, mx + 7, my + 7], outline=(255, 0, 0, 255), width=3)
     d.ellipse([mx - 2, my - 2, mx + 2, my + 2], fill=(255, 0, 0, 255))
 
-    if legend and "radar" in layers:      # generated bar (RainViewer has no scale image)
+    if legend and "heat" in layers and trange:        # temperature gradient scale
+        try:
+            canvas = _stack_below(canvas, _temp_bar(
+                w, trange[0], trange[1], legend.get("title", ""), legend.get("unit", "C")))
+        except Exception:
+            pass
+    elif legend and "radar" in layers:    # generated bar (RainViewer has no scale image)
         try:
             canvas = _stack_below(canvas, _legend_bar(
                 w, legend.get("left", ""), legend.get("right", ""), legend.get("title", "")))
@@ -2439,6 +2580,7 @@ HELP = {
         "<b>Maps</b>\n"
         "<code>radar</code> \u2014 national radar (ANM) over a faded map\n"
         "<code>sat Orsova</code> \u2014 cloud cover\n"
+        "<code>heat Orsova</code> \u2014 temperature map (colour scale on the image)\n"
         "<code>map Orsova</code> \u2014 clouds + radar\n"
         "<code>mapset</code> \u2014 map settings (radar source, dim, cloud colour/opacity, zoom)\n"
         "<code>mapset tz Europe/Bucharest</code> \u2014 local time on maps (or <code>+3</code> / <code>auto</code>)\n\n"
@@ -2491,6 +2633,7 @@ HELP = {
         "<b>Harti</b>\n"
         "<code>radar</code> \u2014 radar national (ANM) peste harta estompata\n"
         "<code>sat Orsova</code> \u2014 acoperire cu nori\n"
+        "<code>heat Orsova</code> \u2014 harta temperaturilor (scara de culori pe imagine)\n"
         "<code>map Orsova</code> \u2014 nori + radar\n"
         "<code>mapset</code> \u2014 setari harta (sursa radar, estompare, culoare/opacitate nori, zoom)\n"
         "<code>mapset tz Europe/Bucharest</code> \u2014 ora locala pe harti (sau <code>+3</code> / <code>auto</code>)\n\n"
@@ -2571,8 +2714,15 @@ def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=Non
     if err:
         return err
     cfg = get_map_cfg(chat_id)
-    bar = {"title": tr("rv_bar_title", lang), "left": tr("rv_bar_left", lang),
-           "right": tr("rv_bar_right", lang)} if "radar" in layers else None
+    if "heat" in layers:
+        tunit = get_units(chat_id)["temp"]            # 'C' or 'F'
+        bar = {"title": tr("heat_bar_title", lang, u=UNIT_LABELS["temp"][tunit]),
+               "unit": tunit}
+    elif "radar" in layers:
+        bar = {"title": tr("rv_bar_title", lang), "left": tr("rv_bar_left", lang),
+               "right": tr("rv_bar_right", lang)}
+    else:
+        bar = None
     try:
         png, tlabel = build_map(loc["lat"], loc["lon"], layers, z=cfg["zoom"],
                                 base_dim=cfg["base_dim"], cloud_rgb=tuple(cfg["cloud_rgb"]),
@@ -2620,6 +2770,11 @@ def cmd_radar(args, chat_id):
 def cmd_sat(args, chat_id):
     # Cloud cover from Open-Meteo (RainViewer's free tier has no satellite).
     return _map_cmd(args, chat_id, ["clouds"], "cap_sat", src_key="map_src_clouds")
+
+def cmd_heat(args, chat_id):
+    # Temperature field sampled from Open-Meteo and coloured on the map.
+    return _map_cmd(args, chat_id, ["heat"], "cap_heat",
+                    src_key="map_src_clouds", legend_key="heat_legend")
 
 def cmd_map(args, chat_id):
     return _map_cmd(args, chat_id, ["clouds", "radar"], "cap_map",
@@ -2950,6 +3105,7 @@ COMMANDS = {
     "restart": cmd_restart, "restartsys": cmd_restart,                  # restartsys kept as alias
     "radar": cmd_radar, "sat": cmd_sat, "satelit": cmd_sat,
     "map": cmd_map, "harta": cmd_map, "mapset": cmd_mapset, "hartaset": cmd_mapset,
+    "heat": cmd_heat, "temp": cmd_heat, "caldura": cmd_heat,
     "start": cmd_start, "help": cmd_start,
 }
 
