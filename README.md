@@ -432,7 +432,10 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `hist Orsova 2025-07-01 2025-07-10` | Past weather for a period |
 | `radar` | National radar image from ANM, over a faded map |
 | `sat Orsova` | Cloud cover (Open-Meteo) over a faded map |
+| `sat Orsova low` | Low clouds only (also `mid` / `high`) — the layer that matters for UAS flights |
 | `heat Orsova` | Temperature map (Open-Meteo) with a °C/°F colour scale on the image |
+| `hum Orsova` | Relative-humidity map (Open-Meteo official scale) |
+| `sat Orsova low +6h` | Any map as a forecast: `+6h`, `+2d` … up to +72h (3 days) |
 | `map Orsova` | Clouds + radar combined |
 | `mapset` | Map settings (radar source, dim, cloud colour/opacity, zoom, time zone) |
 | `alarm 1 21:05` / `alarm off` | Daily 24h forecast for a saved slot at a set time |
@@ -475,6 +478,11 @@ resent on every cycle.
   matches the tiles exactly.
 - **`sat Orsova`** shows **cloud cover** from Open-Meteo (grey = cloudier). The
   free RainViewer tier has no satellite, so cloud cover is used instead.
+  Add `low`, `mid` or `high` for a single cloud layer — e.g. `sat Orsova low`,
+  which is the useful one for UAS flights around a few hundred metres AGL.
+- **Forecast maps.** Any map command accepts a trailing offset — `+6h`, `+12h`,
+  `+2d` — up to **+72 h (3 days)**, e.g. `sat Orsova low +6h`, `heat Orsova +2d`.
+  Without it you get the current field.
 - **`map Orsova`** overlays clouds + radar on one image.
 - **`heat Orsova`** (aliases `temp`, `caldura`) samples Open-Meteo's 2 m temperature
   over the map area and colours it with **Open-Meteo's own official temperature scale**

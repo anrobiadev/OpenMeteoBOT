@@ -641,6 +641,21 @@ T = {
     "map_src_radar": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_anm": {"en": "source: meteoromania.ro (ANM), \u00a9 OpenStreetMap", "ro": "sursa: meteoromania.ro (ANM), \u00a9 OpenStreetMap"},
     "cap_heat": {"en": "Temperature map", "ro": "Harta temperaturilor"},
+    "cap_sat_low": {"en": "Low cloud cover", "ro": "Nori jos"},
+    "cap_sat_mid": {"en": "Mid-level cloud cover", "ro": "Nori la nivel mediu"},
+    "cap_sat_high": {"en": "High cloud cover", "ro": "Nori sus"},
+    "cap_hum": {"en": "Relative humidity (2 m)", "ro": "Umiditate relativa (2 m)"},
+    "map_forecast_in": {"en": "forecast +{h}h", "ro": "prognoza +{h}h"},
+    "hum_bar_title": {"en": "Relative humidity 2 m (%) — Open-Meteo scale",
+                      "ro": "Umiditate relativa 2 m (%) — scara Open-Meteo"},
+    "hum_legend": {
+        "en": ("<b>Colour scale</b> (bottom of the image) — Open-Meteo's official humidity "
+               "scale: pink/orange = dry air · yellow-green = moderate · green/teal = very humid.\n"
+               "<i>High humidity near the ground means mist, fog or low cloud is more likely.</i>"),
+        "ro": ("<b>Scara de culori</b> (jos in imagine) — scara oficiala Open-Meteo pentru umiditate: "
+               "roz/portocaliu = aer uscat · galben-verde = moderat · verde/turcoaz = foarte umed.\n"
+               "<i>Umiditatea mare langa sol inseamna sanse crescute de ceata sau nori jos.</i>"),
+    },
     "heat_bar_title": {"en": "Air temperature 2 m ({u}) — Open-Meteo scale",
                        "ro": "Temperatura aerului 2 m ({u}) — scara Open-Meteo"},
     "heat_legend": {
@@ -1430,45 +1445,86 @@ def _overlay_url(frames, layer, z, x, y):
         return f"{host}{path}/{TILE}/{z}/{x}/{y}/{RV_COLOR_SCHEME}/1_1.png"
     return f"{host}{path}/{TILE}/{z}/{x}/{y}/0/0_0.png"          # satellite
 
-def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None):
-    """Cloud-cover overlay from Open-Meteo cloud_cover sampled on a grid over
-    bbox=(latN, lonW, latS, lonE). `rgb`/`max_alpha` override the defaults.
-    Returns (RGBA_overlay, 'HH:MM') or (None, '')."""
-    rgb = tuple(rgb) if rgb else CLOUD_RGB
-    max_alpha = CLOUD_MAX_ALPHA if max_alpha is None else max_alpha
+def _sample_field(bbox, variable, cols, rows, when=None):
+    """Sample an Open-Meteo variable on a cols×rows grid over bbox=(latN,lonW,latS,lonE).
+    `when` = UTC datetime for a forecast hour (None = current).
+    Returns (values list in row-major order, iso_time) or (None, '')."""
     latN, lonW, latS, lonE = bbox
     lats, lons = [], []
-    for r in range(CLOUD_ROWS):
-        lat = latN + (latS - latN) * (r + 0.5) / CLOUD_ROWS      # row 0 = north (top)
-        for c in range(CLOUD_COLS):
-            lon = lonW + (lonE - lonW) * (c + 0.5) / CLOUD_COLS
+    for r in range(rows):
+        lat = latN + (latS - latN) * (r + 0.5) / rows            # row 0 = north (top)
+        for c in range(cols):
+            lon = lonW + (lonE - lonW) * (c + 0.5) / cols
             lats.append(round(lat, 4)); lons.append(round(lon, 4))
+    params = {"latitude": ",".join(map(str, lats)),
+              "longitude": ",".join(map(str, lons)), "timezone": "UTC"}
+    if when is None:
+        params["current"] = variable
+    else:                                    # one single hour keeps the response small
+        hh = when.strftime("%Y-%m-%dT%H:00")
+        params.update({"hourly": variable, "start_hour": hh, "end_hour": hh})
     try:
-        rr = requests.get(CLOUD_URL, params={
-            "latitude": ",".join(map(str, lats)),
-            "longitude": ",".join(map(str, lons)),
-            "current": "cloud_cover", "timezone": "UTC",
-        }, timeout=20, headers=_TILE_UA)
+        rr = requests.get(CLOUD_URL, params=params, timeout=25, headers=_TILE_UA)
         rr.raise_for_status()
         data = rr.json()
     except (requests.RequestException, ValueError):
         return None, ""
     results = data if isinstance(data, list) else [data]
+    vals, tstamp = [], ""
+    for res in results:
+        if not isinstance(res, dict):
+            vals.append(None); continue
+        if when is None:
+            cur = res.get("current", {})
+            if not tstamp:
+                tstamp = cur.get("time", "")
+            vals.append(cur.get(variable))
+        else:
+            hr = res.get("hourly", {}) or {}
+            times = hr.get("time") or []
+            arr = hr.get(variable) or []
+            if not tstamp and times:
+                tstamp = times[0]
+            vals.append(arr[0] if arr else None)
+    return vals, tstamp
+
+def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None, variable="cloud_cover", when=None):
+    """Cloud-cover overlay (total / low / mid / high) as a translucent grey field.
+    Returns (RGBA_overlay, iso_time) or (None, '')."""
+    rgb = tuple(rgb) if rgb else CLOUD_RGB
+    max_alpha = CLOUD_MAX_ALPHA if max_alpha is None else max_alpha
+    vals, tstamp = _sample_field(bbox, variable, CLOUD_COLS, CLOUD_ROWS, when)
+    if vals is None:
+        return None, ""
     grid = Image.new("RGBA", (CLOUD_COLS, CLOUD_ROWS), (0, 0, 0, 0))
     px = grid.load()
-    tstamp = ""
-    for i, res in enumerate(results):
-        cur = res.get("current", {}) if isinstance(res, dict) else {}
-        if not tstamp:
-            tstamp = cur.get("time", "")
-        cc = cur.get("cloud_cover")
+    for i, cc in enumerate(vals):
         c, row = i % CLOUD_COLS, i // CLOUD_COLS
         if cc is None or row >= CLOUD_ROWS:
             continue
         a = int(max_alpha * max(0.0, min(100.0, float(cc))) / 100.0)
-        px[c, row] = rgb + (a,)                                  # grey clouds (darker = denser)
+        px[c, row] = rgb + (a,)                                  # denser cloud = more opaque
     overlay = grid.resize((w, h), Image.BICUBIC)                 # smooth field
     return overlay, tstamp                                       # ISO time (UTC) or ''
+
+def _rh_overlay(bbox, w, h, when=None, alpha=None):
+    """Relative-humidity field using Open-Meteo's official 'relative' palette."""
+    alpha = TEMP_ALPHA if alpha is None else alpha
+    vals, tstamp = _sample_field(bbox, "relative_humidity_2m", TEMP_COLS, TEMP_ROWS, when)
+    if vals is None or all(v is None for v in vals):
+        return None, "", None, None
+    grid = Image.new("RGBA", (TEMP_COLS, TEMP_ROWS), (0, 0, 0, 0))
+    px = grid.load()
+    got = []
+    for i, v in enumerate(vals):
+        c, row = i % TEMP_COLS, i // TEMP_COLS
+        if v is None or row >= TEMP_ROWS:
+            continue
+        got.append(float(v))
+        px[c, row] = rh_color(float(v)) + (alpha,)
+    if not got:
+        return None, "", None, None
+    return grid.resize((w, h), Image.BICUBIC), tstamp, min(got), max(got)
 
 # --- Temperature map (Open-Meteo temperature_2m sampled on a grid) ---------------
 # Open-Meteo serves no map tiles, so we sample the field and colour it ourselves.
@@ -1491,6 +1547,25 @@ OM_TEMP_COLORS = (
     (255, 141, 0), (255, 118, 0), (255, 94, 0), (255, 71, 0), (255, 47, 0),
     (255, 24, 0), (255, 0, 0), (228, 0, 10), (201, 0, 18), (174, 0, 23), (147, 0, 26),
 )
+# Open-Meteo's official "relative" (humidity) scale, same source as the temp one.
+OM_RH_BREAKS = tuple(range(0, 100, 5))
+OM_RH_COLORS = (
+    (207, 89, 126), (215, 95, 116), (223, 102, 106), (230, 124, 110), (233, 142, 115),
+    (235, 156, 117), (237, 171, 119), (237, 186, 125), (236, 202, 135), (234, 215, 146),
+    (233, 226, 156), (214, 225, 148), (188, 216, 141), (164, 207, 136), (128, 199, 117),
+    (92, 194, 108), (65, 190, 120), (49, 176, 134), (29, 170, 139), (13, 160, 143),
+)
+
+def rh_color(v):
+    """Relative humidity % -> RGB (Open-Meteo breakpoint scale)."""
+    idx = 0
+    for i, b in enumerate(OM_RH_BREAKS):
+        if v >= b:
+            idx = i
+        else:
+            break
+    return OM_RH_COLORS[idx]
+
 TEMP_COLS = int(os.environ.get("TG_TEMP_COLS", "16"))
 TEMP_ROWS = int(os.environ.get("TG_TEMP_ROWS", "14"))
 TEMP_ALPHA = int(os.environ.get("TG_TEMP_ALPHA", "170"))   # let the map show through
@@ -1506,46 +1581,25 @@ def temp_color(c):
             break
     return OM_TEMP_COLORS[idx]
 
-def _temp_overlay(bbox, w, h, alpha=None):
+def _temp_overlay(bbox, w, h, alpha=None, when=None):
     """Temperature field over bbox=(latN, lonW, latS, lonE).
     Returns (RGBA_overlay, iso_time, min_C, max_C) or (None, '', None, None)."""
     alpha = TEMP_ALPHA if alpha is None else alpha
-    latN, lonW, latS, lonE = bbox
-    lats, lons = [], []
-    for r in range(TEMP_ROWS):
-        lat = latN + (latS - latN) * (r + 0.5) / TEMP_ROWS       # row 0 = north (top)
-        for c in range(TEMP_COLS):
-            lon = lonW + (lonE - lonW) * (c + 0.5) / TEMP_COLS
-            lats.append(round(lat, 4)); lons.append(round(lon, 4))
-    try:
-        rr = requests.get(CLOUD_URL, params={
-            "latitude": ",".join(map(str, lats)),
-            "longitude": ",".join(map(str, lons)),
-            "current": "temperature_2m", "timezone": "UTC",
-        }, timeout=25, headers=_TILE_UA)
-        rr.raise_for_status()
-        data = rr.json()
-    except (requests.RequestException, ValueError):
+    vals, tstamp = _sample_field(bbox, "temperature_2m", TEMP_COLS, TEMP_ROWS, when)
+    if vals is None:
         return None, "", None, None
-    results = data if isinstance(data, list) else [data]
     grid = Image.new("RGBA", (TEMP_COLS, TEMP_ROWS), (0, 0, 0, 0))
     px = grid.load()
-    tstamp = ""
-    vals = []
-    for i, res in enumerate(results):
-        cur = res.get("current", {}) if isinstance(res, dict) else {}
-        if not tstamp:
-            tstamp = cur.get("time", "")
-        t = cur.get("temperature_2m")
+    got = []
+    for i, t in enumerate(vals):
         c, row = i % TEMP_COLS, i // TEMP_COLS
         if t is None or row >= TEMP_ROWS:
             continue
-        vals.append(float(t))
+        got.append(float(t))
         px[c, row] = temp_color(float(t)) + (alpha,)
-    if not vals:
+    if not got:
         return None, "", None, None
-    overlay = grid.resize((w, h), Image.BICUBIC)                  # smooth field
-    return overlay, tstamp, min(vals), max(vals)
+    return grid.resize((w, h), Image.BICUBIC), tstamp, min(got), max(got)
 
 # --- Legend bar built from RainViewer's OFFICIAL colour table --------------------
 # Scheme 2 "Universal Blue" (the only one the public API serves), rain colours for
@@ -1622,12 +1676,14 @@ def _legend_bar(width, left_label, right_label, title, height=24):
     d.text((pad + bar_w - tw, ty2), right_label, fill=(40, 40, 40, 255), font=small)
     return img
 
-def _temp_bar(width, vmin_c, vmax_c, title, unit="C", height=24):
-    """Smooth temperature gradient bar with tick labels in the user's unit."""
+def _temp_bar(width, vmin_c, vmax_c, title, unit="C", height=24,
+              color_fn=None, step=None):
+    """Colour-scale bar (temperature by default) with tick labels."""
+    color_fn = color_fn or temp_color
     pad = 10
     font = _load_font(13)
     small = _load_font(11)
-    # widen a little so the range reads nicely, then snap to 5° steps
+    # widen a little so the range reads nicely, then snap to 5-unit steps
     lo = math.floor((vmin_c - 1) / 5.0) * 5
     hi = math.ceil((vmax_c + 1) / 5.0) * 5
     if hi - lo < 10:
@@ -1638,19 +1694,20 @@ def _temp_bar(width, vmin_c, vmax_c, title, unit="C", height=24):
     d.text((pad, 2), title, fill=(30, 30, 30, 255), font=font)
     bar_w = width - 2 * pad
     y0 = title_h + 2
-    for x in range(bar_w):                       # smooth gradient, 1px columns
+    for x in range(bar_w):                       # 1px columns follow the palette steps
         c = lo + (hi - lo) * (x / float(max(1, bar_w - 1)))
-        d.line([pad + x, y0, pad + x, y0 + height], fill=temp_color(c) + (255,))
+        d.line([pad + x, y0, pad + x, y0 + height], fill=color_fn(c) + (255,))
     d.rectangle([pad, y0, pad + bar_w, y0 + height], outline=(90, 90, 90, 255), width=1)
 
-    step = 5 if (hi - lo) <= 40 else 10
+    if step is None:
+        step = 5 if (hi - lo) <= 40 else 10
     ty = y0 + height + 4
     t = lo
     while t <= hi:
         frac = (t - lo) / float(hi - lo)
         x = pad + frac * bar_w
         d.line([x, y0 + height, x, y0 + height + 3], fill=(90, 90, 90, 255), width=1)
-        shown = t if unit == "C" else t * 9.0 / 5.0 + 32.0
+        shown = t * 9.0 / 5.0 + 32.0 if unit == "F" else t
         txt = f"{shown:.0f}"
         try:
             tw = d.textlength(txt, font=small)
@@ -1673,7 +1730,8 @@ def _stack_below(base, strip):
     return out
 
 def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
-              cloud_rgb=None, cloud_alpha=None, tz=None, legend=None):
+              cloud_rgb=None, cloud_alpha=None, tz=None, legend=None,
+              cloud_var="cloud_cover", when=None):
     """Stitch OSM base + weather overlays, centered on the point, with a marker.
     `layers` items: 'radar'/'satellite' (RainViewer tiles) or 'clouds' (Open-Meteo).
     `base_dim` (0..1) washes out the OSM base so weather stands out.
@@ -1720,32 +1778,42 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
     if base_dim > 0:                                  # fade the base map
         canvas.alpha_composite(Image.new("RGBA", (w, h), (255, 255, 255, int(255 * min(1.0, base_dim)))))
     src_dt = None                                     # UTC datetime of the freshest layer
-    trange = None                                     # (min_C, max_C) for the heat legend
+    trange = None                                     # (min, max) for the gradient legend
+
+    def _bbox():
+        latN, lonW = tilexy_to_lonlat(left / TILE, top / TILE, z)
+        latS, lonE = tilexy_to_lonlat((left + w) / TILE, (top + h) / TILE, z)
+        return (latN, lonW, latS, lonE)
+
+    def _stamp(iso):
+        nonlocal src_dt
+        if iso and src_dt is None:
+            try:
+                src_dt = datetime.fromisoformat(iso).replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+
     for layer in layers:
         if layer == "heat":
-            latN, lonW = tilexy_to_lonlat(left / TILE, top / TILE, z)
-            latS, lonE = tilexy_to_lonlat((left + w) / TILE, (top + h) / TILE, z)
-            overlay, tlabel_iso, tmin, tmax = _temp_overlay((latN, lonW, latS, lonE), w, h)
+            overlay, iso, tmin, tmax = _temp_overlay(_bbox(), w, h, when=when)
             if overlay is not None:
                 canvas.alpha_composite(overlay)
                 trange = (tmin, tmax)
-                if tlabel_iso and src_dt is None:
-                    try:
-                        src_dt = datetime.fromisoformat(tlabel_iso).replace(tzinfo=timezone.utc)
-                    except ValueError:
-                        pass
+                _stamp(iso)
             continue
-        if layer == "clouds":
-            latN, lonW = tilexy_to_lonlat(left / TILE, top / TILE, z)
-            latS, lonE = tilexy_to_lonlat((left + w) / TILE, (top + h) / TILE, z)
-            overlay, clabel = _cloud_overlay((latN, lonW, latS, lonE), w, h, cloud_rgb, cloud_alpha)
+        if layer == "humidity":
+            overlay, iso, hmin, hmax = _rh_overlay(_bbox(), w, h, when=when)
             if overlay is not None:
                 canvas.alpha_composite(overlay)
-                if clabel and src_dt is None:
-                    try:
-                        src_dt = datetime.fromisoformat(clabel).replace(tzinfo=timezone.utc)
-                    except ValueError:
-                        pass
+                trange = (hmin, hmax)
+                _stamp(iso)
+            continue
+        if layer == "clouds":
+            overlay, iso = _cloud_overlay(_bbox(), w, h, cloud_rgb, cloud_alpha,
+                                          variable=cloud_var, when=when)
+            if overlay is not None:
+                canvas.alpha_composite(overlay)
+                _stamp(iso)
             continue
         url_of = lambda x, y, L=layer: _overlay_url(frames, L, z, x, y)
         paste_layer(lambda x, y: _fetch_img(url_of(x, y)) if url_of(x, y) else None, True)
@@ -1760,7 +1828,13 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
     d.ellipse([mx - 7, my - 7, mx + 7, my + 7], outline=(255, 0, 0, 255), width=3)
     d.ellipse([mx - 2, my - 2, mx + 2, my + 2], fill=(255, 0, 0, 255))
 
-    if legend and "heat" in layers and trange:        # temperature gradient scale
+    if legend and "humidity" in layers and trange:    # humidity scale (0..100 %)
+        try:
+            canvas = _stack_below(canvas, _temp_bar(
+                w, 0, 100, legend.get("title", ""), unit="%", color_fn=rh_color, step=10))
+        except Exception:
+            pass
+    elif legend and "heat" in layers and trange:      # temperature gradient scale
         try:
             canvas = _stack_below(canvas, _temp_bar(
                 w, trange[0], trange[1], legend.get("title", ""), legend.get("unit", "C")))
@@ -2592,7 +2666,10 @@ HELP = {
         "<b>Maps</b>\n"
         "<code>radar</code> \u2014 national radar (ANM) over a faded map\n"
         "<code>sat Orsova</code> \u2014 cloud cover\n"
+        "<code>sat Orsova low</code> \u2014 low clouds only (key for UAS flights)\n"
         "<code>heat Orsova</code> \u2014 temperature map (colour scale on the image)\n"
+        "<code>hum Orsova</code> \u2014 relative humidity map\n"
+        "<code>sat Orsova low +6h</code> \u2014 any map as forecast, up to +72h\n"
         "<code>map Orsova</code> \u2014 clouds + radar\n"
         "<code>mapset</code> \u2014 map settings (radar source, dim, cloud colour/opacity, zoom)\n"
         "<code>mapset tz Europe/Bucharest</code> \u2014 local time on maps (or <code>+3</code> / <code>auto</code>)\n\n"
@@ -2645,7 +2722,10 @@ HELP = {
         "<b>Harti</b>\n"
         "<code>radar</code> \u2014 radar national (ANM) peste harta estompata\n"
         "<code>sat Orsova</code> \u2014 acoperire cu nori\n"
+        "<code>sat Orsova low</code> \u2014 doar norii jos (esential pentru zboruri UAS)\n"
         "<code>heat Orsova</code> \u2014 harta temperaturilor (scara de culori pe imagine)\n"
+        "<code>hum Orsova</code> \u2014 harta umiditatii relative\n"
+        "<code>sat Orsova low +6h</code> \u2014 orice harta ca prognoza, pana la +72h\n"
         "<code>map Orsova</code> \u2014 nori + radar\n"
         "<code>mapset</code> \u2014 setari harta (sursa radar, estompare, culoare/opacitate nori, zoom)\n"
         "<code>mapset tz Europe/Bucharest</code> \u2014 ora locala pe harti (sau <code>+3</code> / <code>auto</code>)\n\n"
@@ -2716,17 +2796,46 @@ def cmd_anm(args, chat_id):
     set_anm_feeds(chat_id, feeds)
     return tr("anm_set", lang, feeds=", ".join(feeds))
 
-def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=None):
+MAP_MAX_AHEAD_H = 72          # forecast maps: up to 3 days ahead
+_AHEAD_RE = re.compile(r"^\+?(\d{1,3})\s*(h|hr|hours?|ore?|d|z|zile?|days?)$", re.I)
+
+def _parse_ahead(tok):
+    """'+6h' / '12h' / '+2d' / '3zile' -> hours ahead (capped), or None."""
+    mt = _AHEAD_RE.match(tok.strip())
+    if not mt:
+        return None
+    n = int(mt.group(1))
+    unit = mt.group(2).lower()
+    hours = n * 24 if unit.startswith(("d", "z")) else n
+    return max(0, min(hours, MAP_MAX_AHEAD_H))
+
+def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=None,
+             cloud_var="cloud_cover"):
     lang = get_lang(chat_id)
     if not _PIL:
         return tr("map_nopil", lang)
     if not args:
         return tr("wx_usage_short", lang)
-    loc, err = find_location(" ".join(args), chat_id, lang)
+    toks = list(args)
+    ahead = None
+    if len(toks) > 1:                       # optional trailing "+6h" / "+2d"
+        got = _parse_ahead(toks[-1])
+        if got is not None:
+            ahead = got
+            toks = toks[:-1]
+    if not toks:
+        return tr("wx_usage_short", lang)
+    when = None
+    if ahead:
+        when = (datetime.now(timezone.utc) + timedelta(hours=ahead)).replace(
+            minute=0, second=0, microsecond=0)
+    loc, err = find_location(" ".join(toks), chat_id, lang)
     if err:
         return err
     cfg = get_map_cfg(chat_id)
-    if "heat" in layers:
+    if "humidity" in layers:
+        bar = {"title": tr("hum_bar_title", lang)}
+    elif "heat" in layers:
         tunit = get_units(chat_id)["temp"]            # 'C' or 'F'
         bar = {"title": tr("heat_bar_title", lang, u=UNIT_LABELS["temp"][tunit]),
                "unit": tunit}
@@ -2739,12 +2848,14 @@ def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=Non
         png, tlabel = build_map(loc["lat"], loc["lon"], layers, z=cfg["zoom"],
                                 base_dim=cfg["base_dim"], cloud_rgb=tuple(cfg["cloud_rgb"]),
                                 cloud_alpha=cfg["cloud_alpha"], tz=cfg.get("tz", ""),
-                                legend=bar)
+                                legend=bar, cloud_var=cloud_var, when=when)
     except Exception as e:
         return tr("err_generic", lang, e=e)
     if not png:
         return tr("map_nodata", lang)
     cap = f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 {tr(label_key, lang)}"
+    if ahead:
+        cap += " \u00b7 " + tr("map_forecast_in", lang, h=ahead)
     cap += ("\n" + (f"{tlabel} \u00b7 " if tlabel else "") + tr(src_key, lang))
     if legend_key:
         cap += "\n\n" + tr(legend_key, lang)
@@ -2779,9 +2890,31 @@ def cmd_radar(args, chat_id):
     cap += "\n\n" + tr("radar_legend_anm" if ANM_SHOW_SCALE else "radar_legend", lang)
     return Photo(png, cap)
 
+CLOUD_VARS = {"low": ("cloud_cover_low", "cap_sat_low"),
+              "mid": ("cloud_cover_mid", "cap_sat_mid"),
+              "high": ("cloud_cover_high", "cap_sat_high"),
+              "jos": ("cloud_cover_low", "cap_sat_low"),
+              "mijloc": ("cloud_cover_mid", "cap_sat_mid"),
+              "sus": ("cloud_cover_high", "cap_sat_high")}
+
 def cmd_sat(args, chat_id):
     # Cloud cover from Open-Meteo (RainViewer's free tier has no satellite).
-    return _map_cmd(args, chat_id, ["clouds"], "cap_sat", src_key="map_src_clouds")
+    # `sat <loc> low` -> low clouds only (the layer that matters for UAS flights).
+    toks = list(args)
+    var, label = "cloud_cover", "cap_sat"
+    if len(toks) > 1 and toks[-1].lower() in CLOUD_VARS:
+        var, label = CLOUD_VARS[toks[-1].lower()]
+        toks = toks[:-1]
+    elif len(toks) > 2 and toks[-2].lower() in CLOUD_VARS:   # "<loc> low +6h"
+        var, label = CLOUD_VARS[toks[-2].lower()]
+        toks = toks[:-2] + toks[-1:]
+    return _map_cmd(toks, chat_id, ["clouds"], label,
+                    src_key="map_src_clouds", cloud_var=var)
+
+def cmd_hum(args, chat_id):
+    # Relative humidity at 2 m, Open-Meteo's official 'relative' palette.
+    return _map_cmd(args, chat_id, ["humidity"], "cap_hum",
+                    src_key="map_src_clouds", legend_key="hum_legend")
 
 def cmd_heat(args, chat_id):
     # Temperature field sampled from Open-Meteo and coloured on the map.
@@ -3118,6 +3251,7 @@ COMMANDS = {
     "radar": cmd_radar, "sat": cmd_sat, "satelit": cmd_sat,
     "map": cmd_map, "harta": cmd_map, "mapset": cmd_mapset, "hartaset": cmd_mapset,
     "heat": cmd_heat, "temp": cmd_heat, "caldura": cmd_heat,
+    "hum": cmd_hum, "humidity": cmd_hum, "umiditate": cmd_hum,
     "start": cmd_start, "help": cmd_start,
 }
 
