@@ -250,6 +250,7 @@ def get_map_cfg(chat_id):
         "cloud_rgb": list(CLOUD_RGB),   # [r, g, b] of the cloud shading
         "zoom": MAP_ZOOM,               # RainViewer map zoom (3..7)
         "tz": "",                       # map time zone: '' = server local, offset (+3) or IANA
+        "theme": MAP_THEME_DEFAULT,     # 'light' or 'dark' basemap
     }
     cfg.update(load_state().get(str(chat_id), {}).get("map", {}))
     return cfg
@@ -706,22 +707,24 @@ T = {
                "<code>alpha</code> cloud opacity: <b>{alpha}</b>  (0..255)\n"
                "<code>cloud</code> colour RGB: <b>{rgb}</b>\n"
                "<code>zoom</code> map zoom: <b>{zoom}</b>  (3..7)\n"
-               "<code>tz</code> map time zone: <b>{tz}</b>\n\n"
+               "<code>tz</code> map time zone: <b>{tz}</b>\n"
+               "<code>theme</code> basemap: <b>{theme}</b>  (light | dark)\n\n"
                "Change e.g.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
                "<code>mapset alpha 225</code> | <code>mapset cloud 105,105,105</code> | "
-               "<code>mapset zoom 6</code> | <code>mapset tz Europe/Bucharest</code> | "
-               "<code>mapset reset</code>"),
+               "<code>mapset zoom 6</code> | <code>thm dark</code> | "
+               "<code>mapset tz Europe/Bucharest</code> | <code>mapset reset</code>"),
         "ro": ("<b>Setari harta</b>\n"
                "<code>radar</code> sursa: <b>{src}</b>  (anm | rainviewer)\n"
                "<code>dim</code> estompare fundal: <b>{dim}</b>  (0..1)\n"
                "<code>alpha</code> opacitate nori: <b>{alpha}</b>  (0..255)\n"
                "<code>cloud</code> culoare RGB: <b>{rgb}</b>\n"
                "<code>zoom</code> zoom harta: <b>{zoom}</b>  (3..7)\n"
-               "<code>tz</code> fus orar harta: <b>{tz}</b>\n\n"
+               "<code>tz</code> fus orar harta: <b>{tz}</b>\n"
+               "<code>theme</code> fundal harta: <b>{theme}</b>  (light | dark)\n\n"
                "Schimba ex.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
                "<code>mapset alpha 225</code> | <code>mapset cloud 105,105,105</code> | "
-               "<code>mapset zoom 6</code> | <code>mapset tz Europe/Bucharest</code> | "
-               "<code>mapset reset</code>"),
+               "<code>mapset zoom 6</code> | <code>thm dark</code> | "
+               "<code>mapset tz Europe/Bucharest</code> | <code>mapset reset</code>"),
     },
     "mapset_set": {"en": "Set <code>{k}</code> = <b>{v}</b>", "ro": "Setat <code>{k}</code> = <b>{v}</b>"},
     "mapset_reset": {"en": "Map settings reset to defaults.", "ro": "Setarile hartii au fost resetate."},
@@ -736,6 +739,9 @@ T = {
     "mapset_zoom_usage": {"en": "Use: <code>mapset zoom 6</code> (3..7)", "ro": "Foloseste: <code>mapset zoom 6</code> (3..7)"},
     "mapset_tz_usage": {"en": "Use: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>",
                         "ro": "Foloseste: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>"},
+    "mapset_theme_usage": {"en": "Use: <code>thm dark</code> or <code>thm light</code>",
+                           "ro": "Foloseste: <code>thm dark</code> sau <code>thm light</code>"},
+    "map_src_dark": {"en": "© OpenStreetMap, © CARTO", "ro": "© OpenStreetMap, © CARTO"},
     "alarm_none": {"en": "No alarms set. Add one: <code>alarm 1 21:05</code> (saved slot 1 at 21:05).",
                    "ro": "Nicio alarma setata. Adauga: <code>alarm 1 21:05</code> (slotul 1 salvat, la 21:05)."},
     "alarm_list_hdr": {"en": "⏰ <b>Daily forecast alarms</b> (server time):", "ro": "⏰ <b>Alarme prognoza zilnica</b> (ora serverului):"},
@@ -1345,11 +1351,18 @@ MAP_W = int(os.environ.get("TG_MAP_W", "720"))
 MAP_H = int(os.environ.get("TG_MAP_H", "720"))
 MAP_BASE_DIM = float(os.environ.get("TG_MAP_BASE_DIM", "0.55"))  # 0=OSM full color, 1=white-out
 OSM_TILE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+# Dark basemap (CARTO "dark_all") — weather overlays read much better on it.
+DARK_TILE = os.environ.get("TG_DARK_TILE",
+                           "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png")
+MAP_THEME_DEFAULT = os.environ.get("TG_MAP_THEME", "light")   # 'light' or 'dark'
+# On a dark base the clouds must be light to stand out; on light, dark grey.
+CLOUD_RGB_DARK = tuple(int(x) for x in
+                       os.environ.get("TG_CLOUD_RGB_DARK", "235,235,240").split(","))[:3]
 RAINVIEWER_INDEX = "https://api.rainviewer.com/public/weather-maps.json"
 # Cloud cover comes from Open-Meteo (RainViewer's free tier has no satellite):
 CLOUD_URL = "https://api.open-meteo.com/v1/forecast"
-CLOUD_COLS = int(os.environ.get("TG_CLOUD_COLS", "14"))
-CLOUD_ROWS = int(os.environ.get("TG_CLOUD_ROWS", "12"))
+CLOUD_COLS = int(os.environ.get("TG_CLOUD_COLS", "24"))
+CLOUD_ROWS = int(os.environ.get("TG_CLOUD_ROWS", "20"))
 CLOUD_MAX_ALPHA = int(os.environ.get("TG_CLOUD_ALPHA", "225"))   # opacity at 100% overcast
 CLOUD_RGB = tuple(int(x) for x in os.environ.get("TG_CLOUD_RGB", "105,105,105").split(","))[:3]
 _TILE_UA = {"User-Agent": "OpenMeteoBot/1.0 (personal weather bot)"}
@@ -1445,7 +1458,7 @@ def _overlay_url(frames, layer, z, x, y):
         return f"{host}{path}/{TILE}/{z}/{x}/{y}/{RV_COLOR_SCHEME}/1_1.png"
     return f"{host}{path}/{TILE}/{z}/{x}/{y}/0/0_0.png"          # satellite
 
-def _sample_field(bbox, variable, cols, rows, when=None):
+def _sample_field(bbox, variable, cols, rows, when=None, model_id=None):
     """Sample an Open-Meteo variable on a cols×rows grid over bbox=(latN,lonW,latS,lonE).
     `when` = UTC datetime for a forecast hour (None = current).
     Returns (values list in row-major order, iso_time) or (None, '')."""
@@ -1458,6 +1471,8 @@ def _sample_field(bbox, variable, cols, rows, when=None):
             lats.append(round(lat, 4)); lons.append(round(lon, 4))
     params = {"latitude": ",".join(map(str, lats)),
               "longitude": ",".join(map(str, lons)), "timezone": "UTC"}
+    if model_id and model_id != "best_match":     # same model as maps.open-meteo.com
+        params["models"] = model_id
     if when is None:
         params["current"] = variable
     else:                                    # one single hour keeps the response small
@@ -1488,12 +1503,12 @@ def _sample_field(bbox, variable, cols, rows, when=None):
             vals.append(arr[0] if arr else None)
     return vals, tstamp
 
-def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None, variable="cloud_cover", when=None):
+def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None, variable="cloud_cover", when=None, model_id=None):
     """Cloud-cover overlay (total / low / mid / high) as a translucent grey field.
     Returns (RGBA_overlay, iso_time) or (None, '')."""
     rgb = tuple(rgb) if rgb else CLOUD_RGB
     max_alpha = CLOUD_MAX_ALPHA if max_alpha is None else max_alpha
-    vals, tstamp = _sample_field(bbox, variable, CLOUD_COLS, CLOUD_ROWS, when)
+    vals, tstamp = _sample_field(bbox, variable, CLOUD_COLS, CLOUD_ROWS, when, model_id)
     if vals is None:
         return None, ""
     grid = Image.new("RGBA", (CLOUD_COLS, CLOUD_ROWS), (0, 0, 0, 0))
@@ -1507,10 +1522,10 @@ def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None, variable="cloud_cover",
     overlay = grid.resize((w, h), Image.BICUBIC)                 # smooth field
     return overlay, tstamp                                       # ISO time (UTC) or ''
 
-def _rh_overlay(bbox, w, h, when=None, alpha=None):
+def _rh_overlay(bbox, w, h, when=None, alpha=None, model_id=None):
     """Relative-humidity field using Open-Meteo's official 'relative' palette."""
     alpha = TEMP_ALPHA if alpha is None else alpha
-    vals, tstamp = _sample_field(bbox, "relative_humidity_2m", TEMP_COLS, TEMP_ROWS, when)
+    vals, tstamp = _sample_field(bbox, "relative_humidity_2m", TEMP_COLS, TEMP_ROWS, when, model_id)
     if vals is None or all(v is None for v in vals):
         return None, "", None, None
     grid = Image.new("RGBA", (TEMP_COLS, TEMP_ROWS), (0, 0, 0, 0))
@@ -1566,8 +1581,8 @@ def rh_color(v):
             break
     return OM_RH_COLORS[idx]
 
-TEMP_COLS = int(os.environ.get("TG_TEMP_COLS", "16"))
-TEMP_ROWS = int(os.environ.get("TG_TEMP_ROWS", "14"))
+TEMP_COLS = int(os.environ.get("TG_TEMP_COLS", "26"))
+TEMP_ROWS = int(os.environ.get("TG_TEMP_ROWS", "22"))
 TEMP_ALPHA = int(os.environ.get("TG_TEMP_ALPHA", "170"))   # let the map show through
 
 def temp_color(c):
@@ -1581,11 +1596,11 @@ def temp_color(c):
             break
     return OM_TEMP_COLORS[idx]
 
-def _temp_overlay(bbox, w, h, alpha=None, when=None):
+def _temp_overlay(bbox, w, h, alpha=None, when=None, model_id=None):
     """Temperature field over bbox=(latN, lonW, latS, lonE).
     Returns (RGBA_overlay, iso_time, min_C, max_C) or (None, '', None, None)."""
     alpha = TEMP_ALPHA if alpha is None else alpha
-    vals, tstamp = _sample_field(bbox, "temperature_2m", TEMP_COLS, TEMP_ROWS, when)
+    vals, tstamp = _sample_field(bbox, "temperature_2m", TEMP_COLS, TEMP_ROWS, when, model_id)
     if vals is None:
         return None, "", None, None
     grid = Image.new("RGBA", (TEMP_COLS, TEMP_ROWS), (0, 0, 0, 0))
@@ -1731,7 +1746,7 @@ def _stack_below(base, strip):
 
 def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
               cloud_rgb=None, cloud_alpha=None, tz=None, legend=None,
-              cloud_var="cloud_cover", when=None):
+              cloud_var="cloud_cover", when=None, theme="light", model_id=None):
     """Stitch OSM base + weather overlays, centered on the point, with a marker.
     `layers` items: 'radar'/'satellite' (RainViewer tiles) or 'clouds' (Open-Meteo).
     `base_dim` (0..1) washes out the OSM base so weather stands out.
@@ -1774,9 +1789,12 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
         if composite:
             canvas.alpha_composite(layer_img)             # dest (0,0) -> valid
 
-    paste_layer(lambda x, y: _fetch_img(OSM_TILE.format(z=z, x=x, y=y)), False)
+    dark = (theme == "dark")
+    tile_url = DARK_TILE if dark else OSM_TILE
+    paste_layer(lambda x, y: _fetch_img(tile_url.format(z=z, x=x, y=y)), False)
     if base_dim > 0:                                  # fade the base map
-        canvas.alpha_composite(Image.new("RGBA", (w, h), (255, 255, 255, int(255 * min(1.0, base_dim)))))
+        wash = (0, 0, 0) if dark else (255, 255, 255)   # darken on dark, whiten on light
+        canvas.alpha_composite(Image.new("RGBA", (w, h), wash + (int(255 * min(1.0, base_dim)),)))
     src_dt = None                                     # UTC datetime of the freshest layer
     trange = None                                     # (min, max) for the gradient legend
 
@@ -1795,22 +1813,25 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
 
     for layer in layers:
         if layer == "heat":
-            overlay, iso, tmin, tmax = _temp_overlay(_bbox(), w, h, when=when)
+            overlay, iso, tmin, tmax = _temp_overlay(_bbox(), w, h, when=when, model_id=model_id)
             if overlay is not None:
                 canvas.alpha_composite(overlay)
                 trange = (tmin, tmax)
                 _stamp(iso)
             continue
         if layer == "humidity":
-            overlay, iso, hmin, hmax = _rh_overlay(_bbox(), w, h, when=when)
+            overlay, iso, hmin, hmax = _rh_overlay(_bbox(), w, h, when=when, model_id=model_id)
             if overlay is not None:
                 canvas.alpha_composite(overlay)
                 trange = (hmin, hmax)
                 _stamp(iso)
             continue
         if layer == "clouds":
-            overlay, iso = _cloud_overlay(_bbox(), w, h, cloud_rgb, cloud_alpha,
-                                          variable=cloud_var, when=when)
+            crgb = cloud_rgb
+            if dark and (crgb is None or tuple(crgb) == CLOUD_RGB):
+                crgb = CLOUD_RGB_DARK           # light clouds read better on a dark base
+            overlay, iso = _cloud_overlay(_bbox(), w, h, crgb, cloud_alpha,
+                                          variable=cloud_var, when=when, model_id=model_id)
             if overlay is not None:
                 canvas.alpha_composite(overlay)
                 _stamp(iso)
@@ -2670,6 +2691,7 @@ HELP = {
         "<code>heat Orsova</code> \u2014 temperature map (colour scale on the image)\n"
         "<code>hum Orsova</code> \u2014 relative humidity map\n"
         "<code>sat Orsova low +6h</code> \u2014 any map as forecast, up to +72h\n"
+        "<code>thm dark</code> / <code>thm light</code> \u2014 dark or light basemap\n"
         "<code>map Orsova</code> \u2014 clouds + radar\n"
         "<code>mapset</code> \u2014 map settings (radar source, dim, cloud colour/opacity, zoom)\n"
         "<code>mapset tz Europe/Bucharest</code> \u2014 local time on maps (or <code>+3</code> / <code>auto</code>)\n\n"
@@ -2726,6 +2748,7 @@ HELP = {
         "<code>heat Orsova</code> \u2014 harta temperaturilor (scara de culori pe imagine)\n"
         "<code>hum Orsova</code> \u2014 harta umiditatii relative\n"
         "<code>sat Orsova low +6h</code> \u2014 orice harta ca prognoza, pana la +72h\n"
+        "<code>thm dark</code> / <code>thm light</code> \u2014 fundal inchis sau luminos\n"
         "<code>map Orsova</code> \u2014 nori + radar\n"
         "<code>mapset</code> \u2014 setari harta (sursa radar, estompare, culoare/opacitate nori, zoom)\n"
         "<code>mapset tz Europe/Bucharest</code> \u2014 ora locala pe harti (sau <code>+3</code> / <code>auto</code>)\n\n"
@@ -2848,7 +2871,9 @@ def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=Non
         png, tlabel = build_map(loc["lat"], loc["lon"], layers, z=cfg["zoom"],
                                 base_dim=cfg["base_dim"], cloud_rgb=tuple(cfg["cloud_rgb"]),
                                 cloud_alpha=cfg["cloud_alpha"], tz=cfg.get("tz", ""),
-                                legend=bar, cloud_var=cloud_var, when=when)
+                                legend=bar, cloud_var=cloud_var, when=when,
+                                theme=cfg.get("theme", MAP_THEME_DEFAULT),
+                                model_id=MODELS.get(get_model(chat_id), MODELS[DEFAULT_MODEL])[0])
     except Exception as e:
         return tr("err_generic", lang, e=e)
     if not png:
@@ -2925,6 +2950,10 @@ def cmd_map(args, chat_id):
     return _map_cmd(args, chat_id, ["clouds", "radar"], "cap_map",
                     src_key="map_src_both", legend_key="radar_legend")
 
+def cmd_theme(args, chat_id):
+    """Shorthand for `mapset theme dark|light`."""
+    return cmd_mapset(["theme"] + list(args), chat_id)
+
 def cmd_mapset(args, chat_id):
     """User-editable map settings: radar source, base fade, cloud colour/opacity, zoom."""
     lang = get_lang(chat_id)
@@ -2933,7 +2962,8 @@ def cmd_mapset(args, chat_id):
         return tr("mapset_current", lang,
                   src=cfg["radar_src"], dim=f"{cfg['base_dim']:g}",
                   alpha=cfg["cloud_alpha"], rgb=",".join(map(str, cfg["cloud_rgb"])),
-                  zoom=cfg["zoom"], tz=(cfg.get("tz") or "auto (server)"))
+                  zoom=cfg["zoom"], tz=(cfg.get("tz") or "auto (server)"),
+                  theme=cfg.get("theme", MAP_THEME_DEFAULT))
     key = args[0].lower()
     rest = args[1:]
     val = rest[0] if rest else ""
@@ -2978,6 +3008,15 @@ def cmd_mapset(args, chat_id):
             return tr("mapset_zoom_usage", lang)
         set_map_cfg(chat_id, "zoom", zz)
         return tr("mapset_set", lang, k="zoom", v=zz)
+    if key in ("theme", "thm", "tema"):
+        v = val.lower()
+        if v in ("dark", "night", "intunecat", "negru"):
+            set_map_cfg(chat_id, "theme", "dark")
+            return tr("mapset_set", lang, k="theme", v="dark")
+        if v in ("light", "day", "luminos", "alb"):
+            set_map_cfg(chat_id, "theme", "light")
+            return tr("mapset_set", lang, k="theme", v="light")
+        return tr("mapset_theme_usage", lang)
     if key in ("tz", "timezone", "fus"):
         v = val.strip()
         if v.lower() in ("auto", "server", "local", "reset", ""):
@@ -3252,6 +3291,7 @@ COMMANDS = {
     "map": cmd_map, "harta": cmd_map, "mapset": cmd_mapset, "hartaset": cmd_mapset,
     "heat": cmd_heat, "temp": cmd_heat, "caldura": cmd_heat,
     "hum": cmd_hum, "humidity": cmd_hum, "umiditate": cmd_hum,
+    "thm": cmd_theme, "theme": cmd_theme, "tema": cmd_theme,
     "start": cmd_start, "help": cmd_start,
 }
 

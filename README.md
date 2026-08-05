@@ -480,6 +480,10 @@ resent on every cycle.
   free RainViewer tier has no satellite, so cloud cover is used instead.
   Add `low`, `mid` or `high` for a single cloud layer — e.g. `sat Orsova low`,
   which is the useful one for UAS flights around a few hundred metres AGL.
+- **Field accuracy.** The temperature/humidity/cloud maps are sampled from the API
+  on a grid and use the **model you selected** with `model` (e.g. `model iconeu` to
+  match DWD ICON on maps.open-meteo.com). They are a resampled view, so fine detail
+  is smoother than the native-resolution rendering on Open-Meteo's own site.
 - **Forecast maps.** Any map command accepts a trailing offset — `+6h`, `+12h`,
   `+2d` — up to **+72 h (3 days)**, e.g. `sat Orsova low +6h`, `heat Orsova +2d`.
   Without it you get the current field.
@@ -499,6 +503,7 @@ resent on every cycle.
   | cloud colour | `mapset cloud 105,105,105` | RGB of the cloud shading |
   | cloud opacity | `mapset alpha 225` | 0..255 at 100% overcast |
   | zoom | `mapset zoom 6` | RainViewer map zoom (3..7) |
+  | **theme** | `thm dark` / `thm light` (or `mapset theme dark`) | Dark basemap (CARTO) — clouds, rain and radar read much better on it |
   | **time zone** | `mapset tz Europe/Bucharest` / `mapset tz +3` / `mapset tz auto` | Local time on map captions (default: server time) |
   | reset | `mapset reset` | Back to defaults |
 
