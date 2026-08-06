@@ -286,7 +286,7 @@ def get_map_cfg(chat_id):
         "base_dim": MAP_BASE_DIM,       # 0=OSM full colour, 1=white-out
         "cloud_alpha": CLOUD_MAX_ALPHA, # 0..255 opacity at 100% overcast
         "cloud_rgb": list(CLOUD_RGB),   # [r, g, b] of the cloud shading
-        "zoom": MAP_ZOOM,               # RainViewer map zoom (3..7)
+        "zoom": MAP_ZOOM,               # map zoom (3..10)
         "tz": "",                       # map time zone: '' = server local, offset (+3) or IANA
         "theme": MAP_THEME_DEFAULT,     # 'light' or 'dark' basemap
     }
@@ -810,7 +810,7 @@ T = {
                "<code>dim</code> base fade: <b>{dim}</b>  (0..1)\n"
                "<code>alpha</code> cloud opacity: <b>{alpha}</b>  (0..255)\n"
                "<code>cloud</code> colour RGB: <b>{rgb}</b>\n"
-               "<code>zoom</code> map zoom: <b>{zoom}</b>  (3..7)\n"
+               "<code>zoom</code> map zoom: <b>{zoom}</b>  (3..10)\n"
                "<code>tz</code> map time zone: <b>{tz}</b>\n"
                "<code>theme</code> basemap: <b>{theme}</b>  (light | dark)\n\n"
                "Change e.g.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
@@ -822,7 +822,7 @@ T = {
                "<code>dim</code> estompare fundal: <b>{dim}</b>  (0..1)\n"
                "<code>alpha</code> opacitate nori: <b>{alpha}</b>  (0..255)\n"
                "<code>cloud</code> culoare RGB: <b>{rgb}</b>\n"
-               "<code>zoom</code> zoom harta: <b>{zoom}</b>  (3..7)\n"
+               "<code>zoom</code> zoom harta: <b>{zoom}</b>  (3..10)\n"
                "<code>tz</code> fus orar harta: <b>{tz}</b>\n"
                "<code>theme</code> fundal harta: <b>{theme}</b>  (light | dark)\n\n"
                "Schimba ex.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
@@ -840,7 +840,7 @@ T = {
     "mapset_alpha_usage": {"en": "Use: <code>mapset alpha 225</code> (0..255)", "ro": "Foloseste: <code>mapset alpha 225</code> (0..255)"},
     "mapset_rgb_usage": {"en": "Use: <code>mapset cloud 105,105,105</code> (r,g,b 0..255)",
                          "ro": "Foloseste: <code>mapset cloud 105,105,105</code> (r,g,b 0..255)"},
-    "mapset_zoom_usage": {"en": "Use: <code>mapset zoom 6</code> (3..7)", "ro": "Foloseste: <code>mapset zoom 6</code> (3..7)"},
+    "mapset_zoom_usage": {"en": "Use: <code>mapset zoom 8</code> (3..10)", "ro": "Foloseste: <code>mapset zoom 8</code> (3..10)"},
     "mapset_tz_usage": {"en": "Use: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>",
                         "ro": "Foloseste: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>"},
     "mapset_theme_usage": {"en": "Use: <code>thm dark</code> or <code>thm light</code>",
@@ -1450,7 +1450,7 @@ def anm_alerts_for(chat_id, slot, loc, areas, lang):
 
 # --- Radar / satellite maps (RainViewer tiles + OpenStreetMap base) --------------
 TILE = 256
-MAP_ZOOM = int(os.environ.get("TG_MAP_ZOOM", "6"))     # regional view (RainViewer max 7)
+MAP_ZOOM = int(os.environ.get("TG_MAP_ZOOM", "6"))     # regional view (3..10)
 MAP_W = int(os.environ.get("TG_MAP_W", "720"))
 MAP_H = int(os.environ.get("TG_MAP_H", "720"))
 MAP_BASE_DIM = float(os.environ.get("TG_MAP_BASE_DIM", "0.55"))  # 0=OSM full color, 1=white-out
@@ -3459,7 +3459,7 @@ def cmd_mapset(args, chat_id):
         return tr("mapset_set", lang, k="cloud", v=",".join(map(str, rgb)))
     if key in ("zoom", "z"):
         try:
-            zz = int(val); assert 3 <= zz <= 7
+            zz = int(val); assert 3 <= zz <= 10
         except (ValueError, AssertionError):
             return tr("mapset_zoom_usage", lang)
         set_map_cfg(chat_id, "zoom", zz)
