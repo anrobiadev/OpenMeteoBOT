@@ -120,20 +120,6 @@ RIVER_XML_URL = os.environ.get("TG_AFDJ_XML", "https://afdj.ro/ro/tabel_cotele_d
 PEGEL_URL = "https://pegelonline.wsv.de/webservices/rest-api/v2/stations.json"
 RIVER_MAX_KM = float(os.environ.get("TG_RIVER_MAX_KM", "80"))      # nearest-gauge radius
 # AFDJ Danube gauge coordinates (from afdj.ro/ro/cotele-dunarii; XML has no coords).
-AFDJ_STATIONS = {
-    "sulina": (0, 45.15541, 29.65273), "tulcea": (71, 45.17752, 28.80163),
-    "isaccea": (103, 45.27219, 28.45715), "galati": (150, 45.43382, 28.05494),
-    "braila": (170, 45.27161, 27.97429), "harsova": (253, 44.68456, 27.95138),
-    "cernavoda": (300, 44.34163, 28.03162), "calarasi": (370, 44.19616, 27.33132),
-    "oltenita": (430, 44.09046, 26.64070), "giurgiu": (493, 43.89591, 25.96581),
-    "zimnicea": (554, 43.65423, 25.36555), "turnu magurele": (597, 43.75183, 24.86917),
-    "corabia": (630, 43.77476, 24.50154), "bechet": (679, 43.78431, 23.95744),
-    "rast": (738, 43.88517, 23.28135), "calafat": (795, 43.99430, 22.93370),
-    "cetate": (811, 44.11143, 23.04755), "gruia": (851, 44.26657, 22.70469),
-    "drobeta turnu severin": (931, 44.62578, 22.65320), "orsova": (954, 44.72613, 22.39231),
-    "drencova": (1015, 44.63777, 21.97234), "moldova veche": (1048, 44.72135, 21.61983),
-    "bazias": (1072, 44.81591, 21.39048),
-}
 DAILY_MAX = 16  # Open-Meteo daily forecast horizon
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -2708,58 +2694,67 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return 2 * r * math.asin(min(1.0, math.sqrt(a)))
 
 def _xml_field(block, tag):
-    m = re.search(rf"<{tag}><value>([^<]*)</value></{tag}>", block)
+    m = re.search(rf"<{tag}>\s*<value>([^<]*)</value>", block)
     return m.group(1).strip() if m else None
 
 def afdj_levels():
-    """Fetch AFDJ Danube gauges. Returns {norm_name: {...}} with live level + trend."""
+    """Fetch the AFDJ Lower-Danube gauges (afdj.ro). Each gauge is an
+    <item key="N"> block that already carries its coordinates and Danube km,
+    so no hard-coded station list is needed. Returns a list of dicts."""
     try:
         r = requests.get(RIVER_XML_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
         xml = r.text
     except (requests.RequestException, ValueError):
-        return {}
-    out = {}
-    for block in re.split(r"</?node[ >]", xml):
+        return []
+    out = []
+    for block in re.split(r"<item\b[^>]*>", xml)[1:]:
         name = _xml_field(block, "field_localitatea")
         if not name:
+            m = re.search(r"<title><value>([^<]*)</value>", block)
+            name = m.group(1).strip() if m else None
+        if not name:
             continue
-        key = _norm(name)
         def num(tag):
             v = _xml_field(block, tag)
             try:
                 return float(v)
             except (TypeError, ValueError):
                 return None
-        out[key] = {"name": name, "cota": num("field_cota"), "var": num("field_variatia"),
-                    "temp": num("field_temperatura_masurata"), "t48": num("field_tendinta_48h")}
+        geo = re.search(r"<field_geolocation_demo_single>.*?<lat>([-\d.]+)</lat>"
+                        r"<lng>([-\d.]+)</lng>", block, re.S)
+        lat = float(geo.group(1)) if geo else None
+        lon = float(geo.group(2)) if geo else None
+        out.append({"name": name, "lat": lat, "lon": lon,
+                    "km": num("field_km"), "cota": num("field_cota"),
+                    "var": num("field_variatia"),
+                    "temp": num("field_temperatura_masurata"),
+                    "t48": num("field_tendinta_48h")})
     return out
 
 def _river_from_afdj(lat, lon, lang):
-    # nearest Danube gauge by coordinates
+    """Nearest Lower-Danube gauge to the point, using the feed's own coordinates."""
     best, bestd = None, 1e9
-    for key, (km, slat, slon) in AFDJ_STATIONS.items():
-        d = haversine_km(lat, lon, slat, slon)
+    for st in afdj_levels():
+        if st["lat"] is None or st["cota"] is None:
+            continue
+        d = haversine_km(lat, lon, st["lat"], st["lon"])
         if d < bestd:
-            best, bestd = (key, km, slat, slon), d
+            best, bestd = st, d
     if not best or bestd > RIVER_MAX_KM:
         return None
-    levels = afdj_levels()
-    row = levels.get(best[0])
-    if not row or row.get("cota") is None:
-        return None
-    key, km, slat, slon = best
-    var = row["var"]
-    trend = ("→" if not var else ("↗" if var > 0 else "↘"))
-    lines = [f"\U0001f30a <b>{row['name']}</b> — {tr('river_title', lang)}",
+    var = best["var"]
+    trend = ("\u2192" if not var else ("\u2197" if var > 0 else "\u2198"))
+    lines = [f"\U0001f30a <b>{best['name']}</b> \u2014 {tr('river_title', lang)}",
              tr("river_src_afdj", lang) + "\n",
-             tr("river_level", lang, v=f"<b>{row['cota']:.0f} cm</b>",
-                d=f"{var:+.0f}" if var is not None else "—", tr=trend)]
-    if row.get("temp") is not None:
-        lines.append(tr("river_temp", lang, v=f"<b>{row['temp']:.1f}°C</b>"))
-    if row.get("t48") is not None:
-        lines.append(tr("river_forecast48", lang, v=f"<b>{row['t48']:.0f} cm</b>"))
-    lines.append(tr("river_km", lang, km=f"{km:g}"))
+             tr("river_level", lang, v=f"<b>{best['cota']:.0f} cm</b>",
+                d=f"{var:+.0f}" if var is not None else "\u2014", tr=trend)]
+    if best.get("temp") is not None:
+        lines.append(tr("river_temp", lang, v=f"<b>{best['temp']:.1f}\u00b0C</b>"))
+    if best.get("t48"):        # 0 is the feed's "no forecast" sentinel
+        lines.append(tr("river_forecast48", lang, v=f"<b>{best['t48']:.0f} cm</b>"))
+    if best.get("km") is not None:
+        lines.append(tr("river_km", lang, km=f"{best['km']:g}"))
     lines.append(tr("river_near", lang, d=f"{bestd:.0f}"))
     lines.append("\n<i>" + tr("river_note", lang) + "</i>")
     return "\n".join(lines)
