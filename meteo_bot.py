@@ -119,6 +119,9 @@ MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"         # waves / sea
 RIVER_XML_URL = os.environ.get("TG_AFDJ_XML", "https://afdj.ro/ro/tabel_cotele_dunarii/xml")
 PEGEL_URL = "https://pegelonline.wsv.de/webservices/rest-api/v2/stations.json"
 RIVER_MAX_KM = float(os.environ.get("TG_RIVER_MAX_KM", "80"))      # nearest-gauge radius
+INHGA_RIVERS_URL = os.environ.get("TG_INHGA_URL",
+    "https://www.hidro.ro/bulletin_type/prognoza-hidrologica-pentru-rauri/")
+RO_BBOX = (43.4, 20.2, 48.3, 30.1)   # latS, lonW, latN, lonE (Romania + Moldova, rough)
 # AFDJ Danube gauge coordinates (from afdj.ro/ro/cotele-dunarii; XML has no coords).
 DAILY_MAX = 16  # Open-Meteo daily forecast horizon
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -604,6 +607,13 @@ T = {
                          "Danube gauges from AFDJ; forecasts by INHGA.",
                    "ro": "Cota fata de mira locala (poate fi negativa la seceta). "
                          "Statiile de Dunare de la AFDJ; prognozele de la INHGA."},
+    "river_ro_title": {"en": "Romanian rivers — INHGA forecast",
+                       "ro": "Râuri România — prognoză INHGA"},
+    "river_ro_src": {"en": "source: INHGA (hidro.ro)", "ro": "sursa: INHGA (hidro.ro)"},
+    "river_ro_note": {"en": "National river forecast by basin (trend + status vs. the "
+                            "warning levels). INHGA publishes no open per-gauge cm feed.",
+                      "ro": "Prognoză națională pe bazine (tendință + starea față de "
+                            "cotele de atenție). INHGA nu are feed deschis cu cote în cm pe stație."},
     "flood_rising": {"en": "rising ↗", "ro": "in crestere ↗"},
     "flood_falling": {"en": "falling ↘", "ro": "in scadere ↘"},
     "flood_steady": {"en": "steady →", "ro": "stabil →"},
@@ -2777,7 +2787,7 @@ def _river_from_pegel(lat, lon, lang):
         d = haversine_km(lat, lon, s["latitude"], s["longitude"])
         if d < bestd:
             best, bestd, bestw = s, d, wl
-    if not best:
+    if not best or bestd > RIVER_MAX_KM:
         return None
     cm = bestw["currentMeasurement"].get("value")
     st = bestw["currentMeasurement"].get("stateMnwMhw", "")
@@ -2787,6 +2797,59 @@ def _river_from_pegel(lat, lon, lang):
              tr("river_level_p", lang, v=f"<b>{cm:.0f} cm</b>", st=st or "—"),
              tr("river_near", lang, d=f"{bestd:.0f}"),
              "\n<i>" + tr("river_note", lang) + "</i>"]
+    return "\n".join(lines)
+
+def _in_romania(lat, lon):
+    s, w, n, e = RO_BBOX
+    return s <= lat <= n and w <= lon <= e
+
+def _strip_tags(html_txt):
+    t = re.sub(r"(?is)<script.*?</script>", " ", html_txt)
+    t = re.sub(r"(?is)<style.*?</style>", " ", t)
+    t = re.sub(r"(?s)<[^>]+>", " ", t)
+    return html.unescape(re.sub(r"[ \t]+", " ", t))
+
+def inhga_river_bulletin():
+    """Latest INHGA national river forecast (hidro.ro). Returns (title, text) or None.
+    The bulletin is a prose forecast; INHGA has no open per-station cm feed."""
+    try:
+        r = requests.get(INHGA_RIVERS_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        idx = r.text
+    except (requests.RequestException, ValueError):
+        return None
+    m = re.search(r'href="(https://www\.hidro\.ro/bulletin/'
+                  r'prognoza-hidrologica-pentru-rauri[^"]*)"', idx)
+    if not m:
+        return None
+    try:
+        rr = requests.get(m.group(1), timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        rr.raise_for_status()
+        page = rr.text
+    except (requests.RequestException, ValueError):
+        return None
+    tm = re.search(r"<title>([^<]*)</title>", page)
+    title = tm.group(1).split(" \u2013 ")[0].strip() if tm else ""
+    text = _strip_tags(page)
+    fm = re.search(r"(Debitele.*?COTEL[EA] DE [\u0102\u0202A-Z\u021a\u0218\u00ce ]+\.)", text, re.S)
+    body = re.sub(r"\s+", " ", fm.group(1)).strip() if fm else None
+    if not body:
+        dm = re.search(r'property="og:description" content="([^"]*)"', page)
+        body = html.unescape(dm.group(1)).strip() if dm else None
+    return (title, body) if body else None
+
+def _river_from_inhga(lat, lon, lang):
+    """National river forecast for points in Romania (no per-gauge cm available)."""
+    b = inhga_river_bulletin()
+    if not b:
+        return None
+    title, body = b
+    lines = [f"\U0001f30a <b>{tr('river_ro_title', lang)}</b>",
+             tr("river_ro_src", lang) + "\n"]
+    if title:
+        lines.append(f"<i>{title}</i>\n")
+    lines.append(body)
+    lines.append("\n<i>" + tr("river_ro_note", lang) + "</i>")
     return "\n".join(lines)
 
 def cmd_cote(args, chat_id):
@@ -2805,6 +2868,12 @@ def cmd_cote(args, chat_id):
     res = _river_from_afdj(loc["lat"], loc["lon"], lang)   # Romanian Danube first
     if res is None:
         res = _river_from_pegel(loc["lat"], loc["lon"], lang)   # German waterways
+    if res is None:
+        country = (loc.get("country") or "").lower()
+        ro = (("romania" in country or "moldova" in country) if country
+              else _in_romania(loc["lat"], loc["lon"]))
+        if ro:                                                 # Romanian inland rivers (INHGA)
+            res = _river_from_inhga(loc["lat"], loc["lon"], lang)
     return res if res is not None else tr("river_none", lang)
 
 def cmd_hist(args, chat_id):
