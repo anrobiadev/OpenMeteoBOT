@@ -1579,11 +1579,14 @@ def _sample_field(bbox, variable, cols, rows, when=None, model_id=None):
               "longitude": ",".join(lons), "timezone": "UTC"}
     if model_id and model_id != "best_match":     # same model as maps.open-meteo.com
         params["models"] = model_id
+    # Always sample via `hourly` at a single hour (default = current hour). Some
+    # regional models don't serve `current=`, which silently fell back to
+    # best_match and made every model's map look identical; `hourly` is honoured
+    # consistently, so the selected model actually changes the field.
     if when is None:
-        params["current"] = variable
-    else:                                    # one single hour keeps the response small
-        hh = when.strftime("%Y-%m-%dT%H:00")
-        params.update({"hourly": variable, "start_hour": hh, "end_hour": hh})
+        when = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    hh = when.strftime("%Y-%m-%dT%H:00")
+    params.update({"hourly": variable, "start_hour": hh, "end_hour": hh})
     try:
         rr = requests.get(CLOUD_URL, params=params, timeout=25, headers=_TILE_UA)
         rr.raise_for_status()
@@ -3338,6 +3341,8 @@ def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=Non
     if ahead:
         cap += " \u00b7 " + tr("map_forecast_in", lang, h=ahead)
     cap += ("\n" + (f"{tlabel} \u00b7 " if tlabel else "") + tr(src_key, lang))
+    if any(l in ("heat", "humidity", "clouds") for l in layers):   # show the model used
+        cap += " \u00b7 " + resolve_model(get_model(chat_id))[1]
     if legend_key:
         cap += "\n\n" + tr(legend_key, lang)
     return Photo(png, cap)
