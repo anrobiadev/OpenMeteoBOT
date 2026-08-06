@@ -86,7 +86,7 @@ except Exception:
     _PIL = False
 from datetime import datetime, timezone, timedelta
 
-__version__ = "2.1.0"
+__version__ = "2.1.1"
 
 # --- Config ---
 # systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
@@ -866,7 +866,7 @@ T = {
                "<code>dim</code> base fade: <b>{dim}</b>  (0..1)\n"
                "<code>alpha</code> cloud opacity: <b>{alpha}</b>  (0..255)\n"
                "<code>cloud</code> colour RGB: <b>{rgb}</b>\n"
-               "<code>zoom</code> map zoom: <b>{zoom}</b>  (3..10)\n"
+               "<code>zoom</code> map zoom: <b>{zoom}</b>  (3..7)\n"
                "<code>tz</code> map time zone: <b>{tz}</b>\n"
                "<code>theme</code> basemap: <b>{theme}</b>  (light | dark)\n\n"
                "Change e.g.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
@@ -878,7 +878,7 @@ T = {
                "<code>dim</code> estompare fundal: <b>{dim}</b>  (0..1)\n"
                "<code>alpha</code> opacitate nori: <b>{alpha}</b>  (0..255)\n"
                "<code>cloud</code> culoare RGB: <b>{rgb}</b>\n"
-               "<code>zoom</code> zoom harta: <b>{zoom}</b>  (3..10)\n"
+               "<code>zoom</code> zoom harta: <b>{zoom}</b>  (3..7)\n"
                "<code>tz</code> fus orar harta: <b>{tz}</b>\n"
                "<code>theme</code> fundal harta: <b>{theme}</b>  (light | dark)\n\n"
                "Schimba ex.: <code>mapset radar anm</code> | <code>mapset dim 0.5</code> | "
@@ -896,7 +896,7 @@ T = {
     "mapset_alpha_usage": {"en": "Use: <code>mapset alpha 225</code> (0..255)", "ro": "Foloseste: <code>mapset alpha 225</code> (0..255)"},
     "mapset_rgb_usage": {"en": "Use: <code>mapset cloud 105,105,105</code> (r,g,b 0..255)",
                          "ro": "Foloseste: <code>mapset cloud 105,105,105</code> (r,g,b 0..255)"},
-    "mapset_zoom_usage": {"en": "Use: <code>mapset zoom 8</code> (3..10)", "ro": "Foloseste: <code>mapset zoom 8</code> (3..10)"},
+    "mapset_zoom_usage": {"en": "Use: <code>mapset zoom 7</code> (3..7)", "ro": "Foloseste: <code>mapset zoom 7</code> (3..7)"},
     "mapset_tz_usage": {"en": "Use: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>",
                         "ro": "Foloseste: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>"},
     "mapset_theme_usage": {"en": "Use: <code>thm dark</code> or <code>thm light</code>",
@@ -1106,7 +1106,7 @@ JUDET_ABBR = {
     "maramures": "MM", "mehedinti": "MH", "mures": "MS", "neamt": "NT", "olt": "OT",
     "prahova": "PH", "satu mare": "SM", "salaj": "SJ", "sibiu": "SB", "suceava": "SV",
     "teleorman": "TR", "timis": "TM", "tulcea": "TL", "vaslui": "VS", "valcea": "VL",
-    "vrancea": "VN", "bucuresti": "B", "municipiul bucuresti": "B",
+    "vrancea": "VN", "bucuresti": "B", "municipiul bucuresti": "B", "bucharest": "B",
 }
 _ABBR_LOWER = {v.lower(): k for k, v in JUDET_ABBR.items()}   # "bz" -> "buzau"
 
@@ -1548,7 +1548,7 @@ def anm_alerts_for(chat_id, slot, loc, areas, lang):
 
 # --- Radar / satellite maps (RainViewer tiles + OpenStreetMap base) --------------
 TILE = 256
-MAP_ZOOM = int(os.environ.get("TG_MAP_ZOOM", "6"))     # regional view (3..10)
+MAP_ZOOM = int(os.environ.get("TG_MAP_ZOOM", "7"))     # regional view (3..7)
 MAP_W = int(os.environ.get("TG_MAP_W", "720"))
 MAP_H = int(os.environ.get("TG_MAP_H", "720"))
 MAP_BASE_DIM = float(os.environ.get("TG_MAP_BASE_DIM", "0.55"))  # 0=OSM full color, 1=white-out
@@ -1556,6 +1556,13 @@ OSM_TILE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 # Dark basemap (CARTO "dark_all") — weather overlays read much better on it.
 DARK_TILE = os.environ.get("TG_DARK_TILE",
                            "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png")
+# Place-name label tiles (transparent), composited ON TOP of coloured field maps
+# so the user can still orient by cities/borders.
+LABEL_TILE_LIGHT = os.environ.get("TG_LABEL_TILE",
+    "https://basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png")
+LABEL_TILE_DARK = os.environ.get("TG_LABEL_TILE_DARK",
+    "https://basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png")
+MAP_ZOOM_MAX = int(os.environ.get("TG_MAP_ZOOM_MAX", "7"))   # tile providers stop past this
 MAP_THEME_DEFAULT = os.environ.get("TG_MAP_THEME", "light")   # 'light' or 'dark'
 # On a dark base the clouds must be light to stand out; on light, dark grey.
 CLOUD_RGB_DARK = tuple(int(x) for x in
@@ -2009,6 +2016,7 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
     if not _PIL:
         return None, ""
     z = z or MAP_ZOOM
+    z = max(3, min(MAP_ZOOM_MAX, z))   # clamp saved values past the tile limit
     w = w or MAP_W
     h = h or MAP_H
     n = 2 ** z
@@ -2103,6 +2111,10 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
         ts = frames.get("radar_time" if layer == "radar" else "sat_time")
         if ts and src_dt is None:
             src_dt = datetime.fromtimestamp(ts, timezone.utc)
+    # Overlay place-name labels on top of coloured field maps so they stay orientable.
+    if any(l in ("heat", "humidity", "clouds", "pollen") for l in layers):
+        _lbl = LABEL_TILE_DARK if dark else LABEL_TILE_LIGHT
+        paste_layer(lambda x, y: _fetch_img(_lbl.format(z=z, x=x, y=y)), True)
     tlabel = local_time_label(src_dt, tz)
 
     # marker at the exact point (center of the canvas)
@@ -3734,7 +3746,7 @@ def cmd_mapset(args, chat_id):
         return tr("mapset_set", lang, k="cloud", v=",".join(map(str, rgb)))
     if key in ("zoom", "z"):
         try:
-            zz = int(val); assert 3 <= zz <= 10
+            zz = int(val); assert 3 <= zz <= MAP_ZOOM_MAX
         except (ValueError, AssertionError):
             return tr("mapset_zoom_usage", lang)
         set_map_cfg(chat_id, "zoom", zz)
