@@ -1400,8 +1400,8 @@ CLOUD_RGB_DARK = tuple(int(x) for x in
 RAINVIEWER_INDEX = "https://api.rainviewer.com/public/weather-maps.json"
 # Cloud cover comes from Open-Meteo (RainViewer's free tier has no satellite):
 CLOUD_URL = "https://api.open-meteo.com/v1/forecast"
-CLOUD_COLS = int(os.environ.get("TG_CLOUD_COLS", "24"))
-CLOUD_ROWS = int(os.environ.get("TG_CLOUD_ROWS", "20"))
+CLOUD_COLS = int(os.environ.get("TG_CLOUD_COLS", "20"))
+CLOUD_ROWS = int(os.environ.get("TG_CLOUD_ROWS", "16"))
 CLOUD_MAX_ALPHA = int(os.environ.get("TG_CLOUD_ALPHA", "225"))   # opacity at 100% overcast
 CLOUD_RGB = tuple(int(x) for x in os.environ.get("TG_CLOUD_RGB", "105,105,105").split(","))[:3]
 _TILE_UA = {"User-Agent": "OpenMeteoBot/1.0 (personal weather bot)"}
@@ -1500,16 +1500,18 @@ def _overlay_url(frames, layer, z, x, y):
 def _sample_field(bbox, variable, cols, rows, when=None, model_id=None):
     """Sample an Open-Meteo variable on a cols×rows grid over bbox=(latN,lonW,latS,lonE).
     `when` = UTC datetime for a forecast hour (None = current).
-    Returns (values list in row-major order, iso_time) or (None, '')."""
+    Returns (values row-major, iso_time, cols_used, rows_used) or (None, '', 0, 0)."""
     latN, lonW, latS, lonE = bbox
     lats, lons = [], []
     for r in range(rows):
         lat = latN + (latS - latN) * (r + 0.5) / rows            # row 0 = north (top)
         for c in range(cols):
             lon = lonW + (lonE - lonW) * (c + 0.5) / cols
-            lats.append(round(lat, 4)); lons.append(round(lon, 4))
-    params = {"latitude": ",".join(map(str, lats)),
-              "longitude": ",".join(map(str, lons)), "timezone": "UTC"}
+            # 3 decimals (~110 m) keeps the query string short: too many long
+            # coordinates make the URL exceed the server limit and the call fails.
+            lats.append(f"{lat:.3f}"); lons.append(f"{lon:.3f}")
+    params = {"latitude": ",".join(lats),
+              "longitude": ",".join(lons), "timezone": "UTC"}
     if model_id and model_id != "best_match":     # same model as maps.open-meteo.com
         params["models"] = model_id
     if when is None:
@@ -1521,8 +1523,14 @@ def _sample_field(bbox, variable, cols, rows, when=None, model_id=None):
         rr = requests.get(CLOUD_URL, params=params, timeout=25, headers=_TILE_UA)
         rr.raise_for_status()
         data = rr.json()
-    except (requests.RequestException, ValueError):
-        return None, ""
+    except (requests.RequestException, ValueError) as e:
+        # Most likely cause: too many grid points -> URL too long, or the model has
+        # no data here. Retry once on a coarser grid before giving up.
+        print(f"[map] field '{variable}' failed on {cols}x{rows} grid: {e}", flush=True)
+        if cols > 8 and rows > 6:
+            return _sample_field(bbox, variable, max(8, cols // 2), max(6, rows // 2),
+                                 when, model_id)
+        return None, "", 0, 0
     results = data if isinstance(data, list) else [data]
     vals, tstamp = [], ""
     for res in results:
@@ -1540,21 +1548,21 @@ def _sample_field(bbox, variable, cols, rows, when=None, model_id=None):
             if not tstamp and times:
                 tstamp = times[0]
             vals.append(arr[0] if arr else None)
-    return vals, tstamp
+    return vals, tstamp, cols, rows
 
 def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None, variable="cloud_cover", when=None, model_id=None):
     """Cloud-cover overlay (total / low / mid / high) as a translucent grey field.
     Returns (RGBA_overlay, iso_time) or (None, '')."""
     rgb = tuple(rgb) if rgb else CLOUD_RGB
     max_alpha = CLOUD_MAX_ALPHA if max_alpha is None else max_alpha
-    vals, tstamp = _sample_field(bbox, variable, CLOUD_COLS, CLOUD_ROWS, when, model_id)
-    if vals is None:
+    vals, tstamp, gc, gr = _sample_field(bbox, variable, CLOUD_COLS, CLOUD_ROWS, when, model_id)
+    if not vals:
         return None, ""
-    grid = Image.new("RGBA", (CLOUD_COLS, CLOUD_ROWS), (0, 0, 0, 0))
+    grid = Image.new("RGBA", (gc, gr), (0, 0, 0, 0))
     px = grid.load()
     for i, cc in enumerate(vals):
-        c, row = i % CLOUD_COLS, i // CLOUD_COLS
-        if cc is None or row >= CLOUD_ROWS:
+        c, row = i % gc, i // gc
+        if cc is None or row >= gr:
             continue
         a = int(max_alpha * max(0.0, min(100.0, float(cc))) / 100.0)
         px[c, row] = rgb + (a,)                                  # denser cloud = more opaque
@@ -1564,15 +1572,15 @@ def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None, variable="cloud_cover",
 def _rh_overlay(bbox, w, h, when=None, alpha=None, model_id=None):
     """Relative-humidity field using Open-Meteo's official 'relative' palette."""
     alpha = TEMP_ALPHA if alpha is None else alpha
-    vals, tstamp = _sample_field(bbox, "relative_humidity_2m", TEMP_COLS, TEMP_ROWS, when, model_id)
-    if vals is None or all(v is None for v in vals):
+    vals, tstamp, gc, gr = _sample_field(bbox, "relative_humidity_2m", TEMP_COLS, TEMP_ROWS, when, model_id)
+    if not vals or all(v is None for v in vals):
         return None, "", None, None
-    grid = Image.new("RGBA", (TEMP_COLS, TEMP_ROWS), (0, 0, 0, 0))
+    grid = Image.new("RGBA", (gc, gr), (0, 0, 0, 0))
     px = grid.load()
     got = []
     for i, v in enumerate(vals):
-        c, row = i % TEMP_COLS, i // TEMP_COLS
-        if v is None or row >= TEMP_ROWS:
+        c, row = i % gc, i // gc
+        if v is None or row >= gr:
             continue
         got.append(float(v))
         px[c, row] = rh_color(float(v)) + (alpha,)
@@ -1620,8 +1628,8 @@ def rh_color(v):
             break
     return OM_RH_COLORS[idx]
 
-TEMP_COLS = int(os.environ.get("TG_TEMP_COLS", "26"))
-TEMP_ROWS = int(os.environ.get("TG_TEMP_ROWS", "22"))
+TEMP_COLS = int(os.environ.get("TG_TEMP_COLS", "20"))
+TEMP_ROWS = int(os.environ.get("TG_TEMP_ROWS", "16"))
 TEMP_ALPHA = int(os.environ.get("TG_TEMP_ALPHA", "170"))   # let the map show through
 
 def temp_color(c):
@@ -1639,15 +1647,15 @@ def _temp_overlay(bbox, w, h, alpha=None, when=None, model_id=None):
     """Temperature field over bbox=(latN, lonW, latS, lonE).
     Returns (RGBA_overlay, iso_time, min_C, max_C) or (None, '', None, None)."""
     alpha = TEMP_ALPHA if alpha is None else alpha
-    vals, tstamp = _sample_field(bbox, "temperature_2m", TEMP_COLS, TEMP_ROWS, when, model_id)
-    if vals is None:
+    vals, tstamp, gc, gr = _sample_field(bbox, "temperature_2m", TEMP_COLS, TEMP_ROWS, when, model_id)
+    if not vals:
         return None, "", None, None
-    grid = Image.new("RGBA", (TEMP_COLS, TEMP_ROWS), (0, 0, 0, 0))
+    grid = Image.new("RGBA", (gc, gr), (0, 0, 0, 0))
     px = grid.load()
     got = []
     for i, t in enumerate(vals):
-        c, row = i % TEMP_COLS, i // TEMP_COLS
-        if t is None or row >= TEMP_ROWS:
+        c, row = i % gc, i // gc
+        if t is None or row >= gr:
             continue
         got.append(float(t))
         px[c, row] = temp_color(float(t)) + (alpha,)
