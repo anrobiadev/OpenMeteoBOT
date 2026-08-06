@@ -123,6 +123,47 @@ INHGA_RIVERS_URL = os.environ.get("TG_INHGA_URL",
     "https://www.hidro.ro/bulletin_type/prognoza-hidrologica-pentru-rauri/")
 RO_BBOX = (43.4, 20.2, 48.3, 30.1)   # latS, lonW, latN, lonE (Romania + Moldova, rough)
 INHGA_MAP_URL = os.environ.get("TG_INHGA_MAP_URL", "https://www.hidro.ro/prognoze/")
+HYDROINFO_URL = os.environ.get("TG_HYDROINFO_URL",
+    "https://www.hydroinfo.hu/tables/ENG/dunhif_a.html")
+_HYDROINFO_CACHE = {"t": 0.0, "data": None}
+# Main Danube-mainstem gauges outside RO/DE (RO=AFDJ/INHGA, DE=PegelOnline).
+# HYDROINFO lists levels but no coordinates, so we carry them here. name_norm -> (lat, lon, cc)
+DANUBE_GAUGES = {
+    # Austria
+    "engelhartszell": (48.500, 13.740, "AT"), "linz": (48.310, 14.290, "AT"),
+    "mauthausen": (48.240, 14.520, "AT"), "ybbs": (48.170, 15.090, "AT"),
+    "melk": (48.228, 15.333, "AT"), "kienstock": (48.373, 15.463, "AT"),
+    "korneuburg": (48.343, 16.333, "AT"), "wien": (48.212, 16.410, "AT"),
+    "wildungsmauer": (48.130, 16.870, "AT"), "hainburg": (48.150, 16.940, "AT"),
+    # Slovakia
+    "devin": (48.180, 16.980, "SK"), "bratislava": (48.140, 17.110, "SK"),
+    "gabcikovo": (47.890, 17.540, "SK"), "medvedov": (47.810, 17.650, "SK"),
+    "komarno": (47.760, 18.130, "SK"), "sturovo": (47.790, 18.720, "SK"),
+    # Hungary
+    "rajka": (48.000, 17.200, "HU"), "dunaremete": (47.890, 17.440, "HU"),
+    "nagybajcs": (47.770, 17.510, "HU"), "gonyu": (47.730, 17.830, "HU"),
+    "komarom": (47.740, 18.120, "HU"), "labatlan": (47.755, 18.500, "HU"),
+    "esztergom": (47.790, 18.740, "HU"), "szob": (47.820, 18.870, "HU"),
+    "nagymaros": (47.790, 18.960, "HU"), "vac": (47.780, 19.130, "HU"),
+    "god": (47.690, 19.140, "HU"), "budapest": (47.500, 19.050, "HU"),
+    "adony": (47.120, 18.860, "HU"), "dunaujvaros": (46.960, 18.940, "HU"),
+    "dunafoldvar": (46.810, 18.920, "HU"), "paks": (46.620, 18.860, "HU"),
+    "baja": (46.180, 18.950, "HU"), "dunaszekcso": (46.090, 18.760, "HU"),
+    "mohacs": (45.990, 18.680, "HU"),
+    # Croatia
+    "aljmas": (45.460, 18.940, "HR"), "vukovar": (45.350, 19.000, "HR"),
+    "ilok (most)": (45.220, 19.370, "HR"), "ilok": (45.220, 19.370, "HR"),
+    # Serbia
+    "bezdan": (45.850, 18.870, "RS"), "apatin": (45.670, 18.980, "RS"),
+    "bogojevo": (45.530, 19.120, "RS"), "novi sad": (45.250, 19.850, "RS"),
+    "zemun": (44.850, 20.400, "RS"), "pancevo": (44.870, 20.640, "RS"),
+    "smederevo": (44.660, 20.930, "RS"), "veliko gradiste": (44.760, 21.520, "RS"),
+    "prahovo": (44.310, 22.600, "RS"),
+    # Bulgaria
+    "novo selo": (44.160, 22.780, "BG"), "lom": (43.820, 23.240, "BG"),
+    "oryahovo": (43.740, 23.960, "BG"), "svishtov": (43.620, 25.350, "BG"),
+    "ruse": (43.850, 25.970, "BG"), "silistra": (44.120, 27.260, "BG"),
+}
 _INHGA_MAP_CACHE = {"t": 0.0, "data": None}   # the /prognoze/ page is ~750 KB -> cache it
 # AFDJ Danube gauge coordinates (from afdj.ro/ro/cotele-dunarii; XML has no coords).
 DAILY_MAX = 16  # Open-Meteo daily forecast horizon
@@ -652,6 +693,12 @@ T = {
                                "status is relative to INHGA defence levels. ~750 river & Danube gauges.",
                          "ro": "H = citirea la miră față de zero mira (negativă la secetă); "
                                "starea e față de cotele de apărare INHGA. ~750 stații pe râuri și Dunăre."},
+    "river_src_hydroinfo": {"en": "source: HYDROINFO (OVF Hungary, all-Danube table)",
+                            "ro": "sursa: HYDROINFO (OVF Ungaria, tabelul întregii Dunări)"},
+    "river_hydroinfo_note": {"en": "Danube gauge level (cm) vs. its local zero; cross-border "
+                                   "table by the Hungarian water service.",
+                             "ro": "Cota mirei pe Dunăre (cm) față de zero mira; tabel transfrontalier "
+                                   "al serviciului hidrologic maghiar."},
     "flood_rising": {"en": "rising ↗", "ro": "in crestere ↗"},
     "flood_falling": {"en": "falling ↘", "ro": "in scadere ↘"},
     "flood_steady": {"en": "steady →", "ro": "stabil →"},
@@ -3055,6 +3102,68 @@ def _river_from_inhga_map(lat, lon, lang):
     lines.append("\n<i>" + tr("river_inhga_note", lang) + "</i>")
     return bestd, "\n".join(lines)
 
+def hydroinfo_levels():
+    """All Danube gauges (every riparian country) from HYDROINFO, keyed by name.
+    Values in cm; no coordinates in the feed. Cached ~30 min."""
+    now = time.time()
+    if _HYDROINFO_CACHE["data"] is not None and now - _HYDROINFO_CACHE["t"] < 1800:
+        return _HYDROINFO_CACHE["data"]
+    try:
+        r = requests.get(HYDROINFO_URL, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        r.encoding = "utf-8"
+        html_txt = r.text
+    except (requests.RequestException, ValueError):
+        return _HYDROINFO_CACHE["data"] or {}
+    out = {}
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", html_txt, re.S | re.I):
+        cells = [re.sub(r"<[^>]+>", "", c).strip()
+                 for c in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S | re.I)]
+        if len(cells) < 7 or not cells[1]:
+            continue
+        def num(x):
+            try:
+                return float(x)
+            except (TypeError, ValueError):
+                return None
+        level = next((num(cells[i]) for i in (5, 4, 3) if num(cells[i]) is not None), None)
+        if level is None:
+            continue
+        temp = num(cells[8]) if len(cells) > 8 else None
+        out[_norm(cells[1])] = {"name": cells[1].strip(), "level": level,
+                                "change": num(cells[6]) if len(cells) > 6 else None,
+                                "temp": temp}
+    if out:
+        _HYDROINFO_CACHE["t"] = now
+        _HYDROINFO_CACHE["data"] = out
+    return out
+
+def _river_from_hydroinfo(lat, lon, lang):
+    """Nearest foreign Danube gauge (AT/SK/HU/HR/RS/BG) via HYDROINFO."""
+    levels = hydroinfo_levels()
+    # nearest gauge that actually has a reading today (skip empty ones)
+    best, bestd = None, 1e9
+    for key, (slat, slon, cc) in DANUBE_GAUGES.items():
+        if key not in levels:
+            continue
+        d = haversine_km(lat, lon, slat, slon)
+        if d < bestd:
+            best, bestd = (key, cc), d
+    if not best or bestd > RIVER_MAX_KM:
+        return None
+    row = levels[best[0]]
+    chg = row.get("change")
+    arrow = ("\u2192" if not chg else ("\u2197" if chg > 0 else "\u2198"))
+    lines = [f"\U0001f30a <b>{row['name']}</b> ({best[1]}) \u2014 {tr('river_title', lang)}",
+             tr("river_src_hydroinfo", lang) + "\n",
+             tr("river_h", lang, v=f"<b>{row['level']:.0f} cm</b>",
+                d=f"{chg:+.0f}" if chg is not None else "\u2014", tr=arrow)]
+    if row.get("temp") is not None:
+        lines.append(tr("river_temp", lang, v=f"<b>{row['temp']:.1f}\u00b0C</b>"))
+    lines.append(tr("river_near", lang, d=f"{bestd:.0f}"))
+    lines.append("\n<i>" + tr("river_hydroinfo_note", lang) + "</i>")
+    return bestd, "\n".join(lines)
+
 def _in_romania(lat, lon):
     s, w, n, e = RO_BBOX
     return s <= lat <= n and w <= lon <= e
@@ -3141,6 +3250,9 @@ def cmd_cote(args, chat_id):
         m = _river_from_inhga_map(lat, lon, lang)   # ~750 river & Danube gauges (cm)
         if m:
             cands.append((m[0], m[1]))
+    hi = _river_from_hydroinfo(lat, lon, lang)      # foreign Danube gauges (AT/SK/HU/HR/RS/BG)
+    if hi:
+        cands.append((hi[0], hi[1]))
     if cands:
         return min(cands, key=lambda c: c[0])[1]
     if ro:
