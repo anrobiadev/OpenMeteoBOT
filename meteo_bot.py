@@ -86,7 +86,7 @@ except Exception:
     _PIL = False
 from datetime import datetime, timezone, timedelta
 
-__version__ = "2.1.1"
+__version__ = "2.1.2"
 
 # --- Config ---
 # systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
@@ -470,6 +470,11 @@ T = {
     "loc_not_found": {
         "en": "Location not found: {loc}", "ro": "Locatie negasita: {loc}",
     },
+    "loc_ambiguous_geo": {
+        "en": "\u201c{name}\u201d exists in several counties: {opts}. "
+              "Repeat with the county, e.g. <code>{name}, MS</code>.",
+        "ro": "\u201e{name}\u201d exist\u0103 \u00een mai multe jude\u021be: {opts}. "
+              "Reia cu jude\u021bul, ex. <code>{name}, MS</code>."},
     "ambiguous": {
         "en": "Multiple saved locations match: {names}. Be more specific.",
         "ro": "Mai multe locatii salvate se potrivesc: {names}. Fii mai specific.",
@@ -1006,8 +1011,7 @@ WMO_RO = {
 
 def loc_label(loc):
     lbl = loc.get("name", "")
-    adm = _norm(loc.get("admin", "")) if loc.get("admin") else ""
-    abbr = JUDET_ABBR.get(adm, "")
+    abbr = judet_abbr(loc.get("admin", "")) if loc.get("admin") else ""
     if abbr:                                   # e.g. "Gura Vaii (BZ)"
         lbl += f" ({abbr})"
     if loc.get("country"):
@@ -1028,11 +1032,49 @@ def geocode(city, county=None):
         cn = _norm(county)
         cn = _ABBR_LOWER.get(cn, cn)      # accept 'BZ' as well as 'Buzau'
         for cand in res:
-            adm = _norm(cand.get("admin1", ""))
+            adm = _admin_key(cand.get("admin1", ""))
             if cn and (cn in adm or adm in cn):
                 g = cand; break
     return {"name": g["name"], "country": g.get("country", ""),
             "admin": g.get("admin1", ""), "lat": g["latitude"], "lon": g["longitude"]}
+
+def geocode_all(city):
+    """All geocoding candidates for a name (normalised dicts)."""
+    r = requests.get(GEO_URL, params={
+        "name": city, "count": 20, "language": "en", "format": "json"
+    }, timeout=15)
+    r.raise_for_status()
+    res = r.json().get("results") or []
+    return [{"name": g["name"], "country": g.get("country", ""),
+             "admin": g.get("admin1", ""), "lat": g["latitude"], "lon": g["longitude"]}
+            for g in res]
+
+def resolve_place(text, lang):
+    """Geocode a place, honouring a 'Name, County' qualifier and disambiguating
+    same-named towns across counties. Returns (loc, error)."""
+    name, county = split_county(text)
+    cands = geocode_all(name)
+    if not cands:
+        return None, tr("loc_not_found", lang, loc=text)
+    nn = _norm(name)
+    same = [c for c in cands if _norm(c["name"]) == nn] or cands
+    if county:
+        cn = _ABBR_LOWER.get(_norm(county), _norm(county))
+        for c in same:
+            ak = _admin_key(c["admin"])
+            if cn and (cn in ak or ak in cn):
+                return c, None
+        return None, tr("loc_not_found", lang, loc=text)
+    seen, distinct = [], []
+    for c in same:
+        k = _admin_key(c["admin"]) or _norm(c.get("country", ""))
+        if k not in seen:
+            seen.append(k); distinct.append(c)
+    if len(distinct) > 1:                      # ask the user which county
+        opts = ", ".join(f"{c['name']} ({judet_abbr(c['admin']) or c['admin']})"
+                         for c in distinct[:12])
+        return None, tr("loc_ambiguous_geo", lang, name=name, opts=opts)
+    return same[0], None
 
 def parse_coords(text):
     """Accept 'lat,lon' or 'lat lon' -> (lat, lon) or None."""
@@ -1110,6 +1152,18 @@ JUDET_ABBR = {
 }
 _ABBR_LOWER = {v.lower(): k for k, v in JUDET_ABBR.items()}   # "bz" -> "buzau"
 
+def _admin_key(admin):
+    """Normalise an Open-Meteo admin1 ('Botoșani County', 'Județul Buzău', 'Arges')
+    down to the bare judet name used in JUDET_ABBR."""
+    k = _norm(admin)
+    if k.endswith(" county"):
+        k = k[:-len(" county")]
+    k = k.replace("judetul ", "").replace("judet ", "").strip()
+    return k
+
+def judet_abbr(admin):
+    return JUDET_ABBR.get(_admin_key(admin), "")
+
 def split_county(text):
     """Split 'Name, County' (or 'Name County' when the last word is a judet) into
     (name, county). Returns (text, None) when no county qualifier is present."""
@@ -1155,11 +1209,7 @@ def find_location(text, chat_id, lang):
     if len(m) > 1:
         names = ", ".join(loc_label(x[1]) for x in m)
         return None, tr("ambiguous", lang, names=names)
-    name, county = split_county(text)
-    g = geocode(name, county)
-    if g:
-        return g, None
-    return None, tr("loc_not_found", lang, loc=text)
+    return resolve_place(text, lang)
 
 # --- Open-Meteo: hourly forecast for the wx command ---
 def forecast(lat, lon, model_id, units):
@@ -2388,9 +2438,9 @@ def cmd_save(args, chat_id):
                  "country": "", "lat": lat, "lon": lon}
     else:
         loc_text = " ".join(rest).strip()
-        loc = coords_or_city(loc_text)
-        if not loc:
-            return tr("city_not_found", lang, city=loc_text)
+        loc, err = resolve_place(loc_text, lang)
+        if err:
+            return err
         entry = {"name": loc["name"], "country": loc.get("country", ""),
                  "admin": loc.get("admin", ""), "lat": loc["lat"], "lon": loc["lon"]}
     def m(state):
