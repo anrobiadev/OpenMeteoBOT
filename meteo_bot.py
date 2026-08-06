@@ -115,6 +115,25 @@ ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"  # ERA5 history
 AQI_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"  # air quality
 FLOOD_URL = "https://flood-api.open-meteo.com/v1/flood"            # GloFAS river discharge
 MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"         # waves / sea state
+
+RIVER_XML_URL = os.environ.get("TG_AFDJ_XML", "https://afdj.ro/ro/tabel_cotele_dunarii/xml")
+PEGEL_URL = "https://pegelonline.wsv.de/webservices/rest-api/v2/stations.json"
+RIVER_MAX_KM = float(os.environ.get("TG_RIVER_MAX_KM", "80"))      # nearest-gauge radius
+# AFDJ Danube gauge coordinates (from afdj.ro/ro/cotele-dunarii; XML has no coords).
+AFDJ_STATIONS = {
+    "sulina": (0, 45.15541, 29.65273), "tulcea": (71, 45.17752, 28.80163),
+    "isaccea": (103, 45.27219, 28.45715), "galati": (150, 45.43382, 28.05494),
+    "braila": (170, 45.27161, 27.97429), "harsova": (253, 44.68456, 27.95138),
+    "cernavoda": (300, 44.34163, 28.03162), "calarasi": (370, 44.19616, 27.33132),
+    "oltenita": (430, 44.09046, 26.64070), "giurgiu": (493, 43.89591, 25.96581),
+    "zimnicea": (554, 43.65423, 25.36555), "turnu magurele": (597, 43.75183, 24.86917),
+    "corabia": (630, 43.77476, 24.50154), "bechet": (679, 43.78431, 23.95744),
+    "rast": (738, 43.88517, 23.28135), "calafat": (795, 43.99430, 22.93370),
+    "cetate": (811, 44.11143, 23.04755), "gruia": (851, 44.26657, 22.70469),
+    "drobeta turnu severin": (931, 44.62578, 22.65320), "orsova": (954, 44.72613, 22.39231),
+    "drencova": (1015, 44.63777, 21.97234), "moldova veche": (1048, 44.72135, 21.61983),
+    "bazias": (1072, 44.81591, 21.39048),
+}
 DAILY_MAX = 16  # Open-Meteo daily forecast horizon
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -581,6 +600,24 @@ T = {
                      "ro": "Fara date de debit pentru acest punct (nu e langa un rau modelat)."},
     "flood_note": {"en": "⚠️ marks days near the period's peak. GloFAS ~5 km, not a local gauge.",
                    "ro": "⚠️ marcheaza zilele aproape de varf. GloFAS ~5 km, nu o statie locala."},
+    # river water levels ("cote")
+    "river_usage": {"en": "Usage: <code>cote Orsova</code> (or save a location and just type <code>cote</code>)",
+                    "ro": "Utilizare: <code>cote Orsova</code> (sau salveaza o locatie si scrie doar <code>cote</code>)"},
+    "river_title": {"en": "river level", "ro": "cota apei"},
+    "river_none": {"en": "No river gauge near this point (Romanian Danube / German waterways only).",
+                   "ro": "Nicio statie de cota langa acest punct (doar Dunarea romaneasca / cai navigabile germane)."},
+    "river_src_afdj": {"en": "source: AFDJ Galați (afdj.ro)", "ro": "sursa: AFDJ Galați (afdj.ro)"},
+    "river_src_pegel": {"en": "source: WSV PegelOnline (Germany)", "ro": "sursa: WSV PegelOnline (Germania)"},
+    "river_level": {"en": "🌊 Level: {v}  (24h {d} cm {tr})", "ro": "🌊 Cota: {v}  (24h {d} cm {tr})"},
+    "river_level_p": {"en": "🌊 Level: {v}  ({st})", "ro": "🌊 Cota: {v}  ({st})"},
+    "river_temp": {"en": "🌡 Water temp: {v}", "ro": "🌡 Temperatura apei: {v}"},
+    "river_forecast48": {"en": "📈 In 48h (INHGA): {v}", "ro": "📈 Peste 48h (INHGA): {v}"},
+    "river_km": {"en": "📍 Danube km {km}", "ro": "📍 km Dunare {km}"},
+    "river_near": {"en": "≈ {d} km from your point", "ro": "≈ {d} km de punctul tau"},
+    "river_note": {"en": "Level relative to the local gauge zero (can be negative in drought). "
+                         "Danube gauges from AFDJ; forecasts by INHGA.",
+                   "ro": "Cota fata de mira locala (poate fi negativa la seceta). "
+                         "Statiile de Dunare de la AFDJ; prognozele de la INHGA."},
     "flood_rising": {"en": "rising ↗", "ro": "in crestere ↗"},
     "flood_falling": {"en": "falling ↘", "ro": "in scadere ↘"},
     "flood_steady": {"en": "steady →", "ro": "stabil →"},
@@ -1524,12 +1561,17 @@ def _sample_field(bbox, variable, cols, rows, when=None, model_id=None):
         rr.raise_for_status()
         data = rr.json()
     except (requests.RequestException, ValueError) as e:
-        # Most likely cause: too many grid points -> URL too long, or the model has
-        # no data here. Retry once on a coarser grid before giving up.
-        print(f"[map] field '{variable}' failed on {cols}x{rows} grid: {e}", flush=True)
+        # Causes: too many grid points -> URL too long; or the chosen regional model
+        # rejects a multi-point `current=`/`hourly=` query. Retry on a coarser grid,
+        # then (if a model was pinned) retry without it so global data still renders.
+        print(f"[map] field '{variable}' failed on {cols}x{rows} grid "
+              f"(model={model_id}): {e}", flush=True)
         if cols > 8 and rows > 6:
             return _sample_field(bbox, variable, max(8, cols // 2), max(6, rows // 2),
                                  when, model_id)
+        if model_id:                       # drop the model -> Open-Meteo best_match
+            print(f"[map] retrying field '{variable}' without model", flush=True)
+            return _sample_field(bbox, variable, cols, rows, when, None)
         return None, "", 0, 0
     results = data if isinstance(data, list) else [data]
     vals, tstamp = [], ""
@@ -1548,6 +1590,12 @@ def _sample_field(bbox, variable, cols, rows, when=None, model_id=None):
             if not tstamp and times:
                 tstamp = times[0]
             vals.append(arr[0] if arr else None)
+    if model_id and all(v is None for v in vals):
+        # The pinned regional model has no coverage at these points -> fall back to
+        # the global best_match so the overlay isn't silently blank.
+        print(f"[map] field '{variable}' all-null for model {model_id}; "
+              f"falling back to best_match", flush=True)
+        return _sample_field(bbox, variable, cols, rows, when, None)
     return vals, tstamp, cols, rows
 
 def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None, variable="cloud_cover", when=None, model_id=None):
@@ -1556,7 +1604,7 @@ def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None, variable="cloud_cover",
     rgb = tuple(rgb) if rgb else CLOUD_RGB
     max_alpha = CLOUD_MAX_ALPHA if max_alpha is None else max_alpha
     vals, tstamp, gc, gr = _sample_field(bbox, variable, CLOUD_COLS, CLOUD_ROWS, when, model_id)
-    if not vals:
+    if not vals or all(v is None for v in vals):
         return None, ""
     grid = Image.new("RGBA", (gc, gr), (0, 0, 0, 0))
     px = grid.load()
@@ -2650,6 +2698,120 @@ def cmd_marine(args, chat_id):
              "\n<i>" + tr("marine_legend", lang) + "</i>"]
     return "\n".join(lines)
 
+# --- River water levels ("cote") — AFDJ (Romanian Danube) + PegelOnline (Germany) ---
+def haversine_km(lat1, lon1, lat2, lon2):
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+
+def _xml_field(block, tag):
+    m = re.search(rf"<{tag}><value>([^<]*)</value></{tag}>", block)
+    return m.group(1).strip() if m else None
+
+def afdj_levels():
+    """Fetch AFDJ Danube gauges. Returns {norm_name: {...}} with live level + trend."""
+    try:
+        r = requests.get(RIVER_XML_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        xml = r.text
+    except (requests.RequestException, ValueError):
+        return {}
+    out = {}
+    for block in re.split(r"</?node[ >]", xml):
+        name = _xml_field(block, "field_localitatea")
+        if not name:
+            continue
+        key = _norm(name)
+        def num(tag):
+            v = _xml_field(block, tag)
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+        out[key] = {"name": name, "cota": num("field_cota"), "var": num("field_variatia"),
+                    "temp": num("field_temperatura_masurata"), "t48": num("field_tendinta_48h")}
+    return out
+
+def _river_from_afdj(lat, lon, lang):
+    # nearest Danube gauge by coordinates
+    best, bestd = None, 1e9
+    for key, (km, slat, slon) in AFDJ_STATIONS.items():
+        d = haversine_km(lat, lon, slat, slon)
+        if d < bestd:
+            best, bestd = (key, km, slat, slon), d
+    if not best or bestd > RIVER_MAX_KM:
+        return None
+    levels = afdj_levels()
+    row = levels.get(best[0])
+    if not row or row.get("cota") is None:
+        return None
+    key, km, slat, slon = best
+    var = row["var"]
+    trend = ("→" if not var else ("↗" if var > 0 else "↘"))
+    lines = [f"\U0001f30a <b>{row['name']}</b> — {tr('river_title', lang)}",
+             tr("river_src_afdj", lang) + "\n",
+             tr("river_level", lang, v=f"<b>{row['cota']:.0f} cm</b>",
+                d=f"{var:+.0f}" if var is not None else "—", tr=trend)]
+    if row.get("temp") is not None:
+        lines.append(tr("river_temp", lang, v=f"<b>{row['temp']:.1f}°C</b>"))
+    if row.get("t48") is not None:
+        lines.append(tr("river_forecast48", lang, v=f"<b>{row['t48']:.0f} cm</b>"))
+    lines.append(tr("river_km", lang, km=f"{km:g}"))
+    lines.append(tr("river_near", lang, d=f"{bestd:.0f}"))
+    lines.append("\n<i>" + tr("river_note", lang) + "</i>")
+    return "\n".join(lines)
+
+def _river_from_pegel(lat, lon, lang):
+    try:
+        r = requests.get(PEGEL_URL, params={"latitude": lat, "longitude": lon,
+                         "radius": RIVER_MAX_KM, "includeCurrentMeasurement": "true"},
+                         timeout=15, headers=_TILE_UA)
+        r.raise_for_status()
+        stations = r.json()
+    except (requests.RequestException, ValueError):
+        return None
+    best, bestd, bestw = None, 1e9, None
+    for s in stations if isinstance(stations, list) else []:
+        wl = next((ts for ts in s.get("timeseries", [])
+                   if ts.get("shortname") == "W" and ts.get("currentMeasurement")), None)
+        if not wl or not isinstance(s.get("latitude"), (int, float)):
+            continue
+        d = haversine_km(lat, lon, s["latitude"], s["longitude"])
+        if d < bestd:
+            best, bestd, bestw = s, d, wl
+    if not best:
+        return None
+    cm = bestw["currentMeasurement"].get("value")
+    st = bestw["currentMeasurement"].get("stateMnwMhw", "")
+    water = (best.get("water") or {}).get("longname", "")
+    lines = [f"\U0001f30a <b>{best.get('longname', best.get('shortname', ''))}</b> ({water}) — {tr('river_title', lang)}",
+             tr("river_src_pegel", lang) + "\n",
+             tr("river_level_p", lang, v=f"<b>{cm:.0f} cm</b>", st=st or "—"),
+             tr("river_near", lang, d=f"{bestd:.0f}"),
+             "\n<i>" + tr("river_note", lang) + "</i>"]
+    return "\n".join(lines)
+
+def cmd_cote(args, chat_id):
+    lang = get_lang(chat_id)
+    if not args:
+        # default to saved slot 1 if present
+        locs = load_state().get(str(chat_id), {}).get("locations", {})
+        if "1" in locs:
+            loc = locs["1"]
+        else:
+            return tr("river_usage", lang)
+    else:
+        loc, err = find_location(" ".join(args), chat_id, lang)
+        if err:
+            return err
+    res = _river_from_afdj(loc["lat"], loc["lon"], lang)   # Romanian Danube first
+    if res is None:
+        res = _river_from_pegel(loc["lat"], loc["lon"], lang)   # German waterways
+    return res if res is not None else tr("river_none", lang)
+
 def cmd_hist(args, chat_id):
     lang = get_lang(chat_id)
     if len(args) < 3:
@@ -2732,6 +2894,7 @@ HELP = {
         "<code>soil Orsova</code> \u2014 soil moisture + temperature now\n"
         "<code>air Orsova</code> \u2014 air quality (European AQI + pollutants)\n"
         "<code>flood Orsova</code> \u2014 river discharge forecast (GloFAS)\n"
+        "<code>cote Orsova</code> \u2014 Danube/river water level (AFDJ / PegelOnline)\n"
         "<code>wind Orsova</code> \u2014 wind speed &amp; direction by height (10 m \u2026 ~3 km)\n"
         "<code>wind Orsova uas</code> \u2014 250\u2013800 m every 100 m (or <code>wind Orsova 300-600</code>)\n"
         "<code>marine Constanta</code> \u2014 sea state: waves, swell, water temp\n"
@@ -2789,6 +2952,7 @@ HELP = {
         "<code>soil Orsova</code> \u2014 umiditatea solului + temperatura acum\n"
         "<code>air Orsova</code> \u2014 calitatea aerului (AQI european + poluanti)\n"
         "<code>flood Orsova</code> \u2014 prognoza debit rau (GloFAS)\n"
+        "<code>cote Orsova</code> \u2014 cota apei Dunarii/raurilor (AFDJ / PegelOnline)\n"
         "<code>wind Orsova</code> \u2014 viteza si directia vantului pe inaltimi (10 m \u2026 ~3 km)\n"
         "<code>wind Orsova uas</code> \u2014 250\u2013800 m din 100 in 100 (sau <code>wind Orsova 300-600</code>)\n"
         "<code>marine Constanta</code> \u2014 starea marii: valuri, hula, temp apa\n"
@@ -3334,6 +3498,7 @@ COMMANDS = {
     "save": cmd_save, "locs": cmd_locs, "del": cmd_del, "alerts": cmd_alerts,
     "set": cmd_set, "units": cmd_units, "soil": cmd_soil, "hist": cmd_hist,
     "air": cmd_air, "aer": cmd_air, "flood": cmd_flood, "inundatii": cmd_flood,
+    "cote": cmd_cote, "river": cmd_cote, "dunare": cmd_cote, "nivel": cmd_cote,
     "marine": cmd_marine, "mare": cmd_marine, "wind": cmd_wind, "vant": cmd_wind,
     "lang": cmd_lang, "anm": cmd_anm, "alarm": cmd_alarm, "alarma": cmd_alarm,
     "interval": cmd_interval,
