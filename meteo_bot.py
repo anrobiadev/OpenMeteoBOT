@@ -592,6 +592,12 @@ T = {
     "air_uv_clear": {"en": "UV clear sky", "ro": "UV cer senin"},
     "air_pollen_none": {"en": "Pollen: no data (only in Europe, in season).",
                         "ro": "Polen: fara date (doar in Europa, in sezon)."},
+    "polm_usage": {"en": "Usage: <code>polm Bucuresti [plant]</code> — plant: grass, ragweed, birch, alder, mugwort, olive",
+                   "ro": "Utilizare: <code>polm Bucuresti [planta]</code> — planta: graminee, ambrozie, mesteacan, anin, pelin, maslin"},
+    "cap_polm": {"en": "pollen map — {p}", "ro": "harta polen — {p}"},
+    "map_src_pollen": {"en": "source: Open-Meteo (CAMS pollen)", "ro": "sursa: Open-Meteo (polen CAMS)"},
+    "polm_legend": {"en": "Colour = pollen risk: green low → red very high. Europe only, in season.",
+                    "ro": "Culoare = risc polen: verde scazut → rosu foarte ridicat. Doar Europa, in sezon."},
     "pol_alder": {"en": "Alder", "ro": "Anin"},
     "pol_birch": {"en": "Birch", "ro": "Mesteacan"},
     "pol_grass": {"en": "Grass", "ro": "Graminee"},
@@ -1562,7 +1568,7 @@ def _overlay_url(frames, layer, z, x, y):
         return f"{host}{path}/{TILE}/{z}/{x}/{y}/{RV_COLOR_SCHEME}/1_1.png"
     return f"{host}{path}/{TILE}/{z}/{x}/{y}/0/0_0.png"          # satellite
 
-def _sample_field(bbox, variable, cols, rows, when=None, model_id=None):
+def _sample_field(bbox, variable, cols, rows, when=None, model_id=None, url=None):
     """Sample an Open-Meteo variable on a cols×rows grid over bbox=(latN,lonW,latS,lonE).
     `when` = UTC datetime for a forecast hour (None = current).
     Returns (values row-major, iso_time, cols_used, rows_used) or (None, '', 0, 0)."""
@@ -1588,7 +1594,7 @@ def _sample_field(bbox, variable, cols, rows, when=None, model_id=None):
     hh = when.strftime("%Y-%m-%dT%H:00")
     params.update({"hourly": variable, "start_hour": hh, "end_hour": hh})
     try:
-        rr = requests.get(CLOUD_URL, params=params, timeout=25, headers=_TILE_UA)
+        rr = requests.get(url or CLOUD_URL, params=params, timeout=25, headers=_TILE_UA)
         rr.raise_for_status()
         data = rr.json()
     except (requests.RequestException, ValueError) as e:
@@ -1599,10 +1605,10 @@ def _sample_field(bbox, variable, cols, rows, when=None, model_id=None):
               f"(model={model_id}): {e}", flush=True)
         if cols > 8 and rows > 6:
             return _sample_field(bbox, variable, max(8, cols // 2), max(6, rows // 2),
-                                 when, model_id)
+                                 when, model_id, url)
         if model_id:                       # drop the model -> Open-Meteo best_match
             print(f"[map] retrying field '{variable}' without model", flush=True)
-            return _sample_field(bbox, variable, cols, rows, when, None)
+            return _sample_field(bbox, variable, cols, rows, when, None, url)
         return None, "", 0, 0
     results = data if isinstance(data, list) else [data]
     vals, tstamp = [], ""
@@ -1626,7 +1632,7 @@ def _sample_field(bbox, variable, cols, rows, when=None, model_id=None):
         # the global best_match so the overlay isn't silently blank.
         print(f"[map] field '{variable}' all-null for model {model_id}; "
               f"falling back to best_match", flush=True)
-        return _sample_field(bbox, variable, cols, rows, when, None)
+        return _sample_field(bbox, variable, cols, rows, when, None, url)
     return vals, tstamp, cols, rows
 
 def _cloud_overlay(bbox, w, h, rgb=None, max_alpha=None, variable="cloud_cover", when=None, model_id=None):
@@ -1817,6 +1823,35 @@ def _legend_bar(width, left_label, right_label, title, height=24):
     d.text((pad + bar_w - tw, ty2), right_label, fill=(40, 40, 40, 255), font=small)
     return img
 
+def pollen_color(v):
+    """Pollen concentration (grains/m3) -> RGB risk gradient."""
+    v = float(v)
+    if v <= 0:   return (200, 228, 200)
+    if v < 10:   return (120, 200, 80)     # low
+    if v < 30:   return (240, 220, 60)     # moderate
+    if v < 100:  return (245, 150, 40)     # high
+    return (220, 45, 45)                    # very high
+
+def _pollen_overlay(bbox, w, h, variable="grass_pollen", when=None, alpha=None):
+    """Pollen field (CAMS air-quality API) coloured by risk."""
+    alpha = TEMP_ALPHA if alpha is None else alpha
+    vals, tstamp, gc, gr = _sample_field(bbox, variable, TEMP_COLS, TEMP_ROWS,
+                                         when, None, url=AQI_URL)
+    if not vals or all(v is None for v in vals):
+        return None, "", None, None
+    grid = Image.new("RGBA", (gc, gr), (0, 0, 0, 0))
+    px = grid.load()
+    got = []
+    for i, t in enumerate(vals):
+        c, row = i % gc, i // gc
+        if t is None or row >= gr:
+            continue
+        got.append(float(t))
+        px[c, row] = pollen_color(float(t)) + (alpha,)
+    if not got:
+        return None, "", None, None
+    return grid.resize((w, h), Image.BICUBIC), tstamp, min(got), max(got)
+
 def _temp_bar(width, vmin_c, vmax_c, title, unit="C", height=24,
               color_fn=None, step=None):
     """Colour-scale bar (temperature by default) with tick labels."""
@@ -1872,7 +1907,8 @@ def _stack_below(base, strip):
 
 def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
               cloud_rgb=None, cloud_alpha=None, tz=None, legend=None,
-              cloud_var="cloud_cover", when=None, theme="light", model_id=None):
+              cloud_var="cloud_cover", when=None, theme="light", model_id=None,
+              pollen_var="grass_pollen"):
     """Stitch OSM base + weather overlays, centered on the point, with a marker.
     `layers` items: 'radar'/'satellite' (RainViewer tiles) or 'clouds' (Open-Meteo).
     `base_dim` (0..1) washes out the OSM base so weather stands out.
@@ -1938,6 +1974,14 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
                 pass
 
     for layer in layers:
+        if layer == "pollen":
+            overlay, iso, pmn, pmx = _pollen_overlay(_bbox(), w, h,
+                                                     variable=pollen_var, when=when)
+            if overlay is not None:
+                canvas.alpha_composite(overlay)
+                trange = (pmn, pmx)
+                _stamp(iso)
+            continue
         if layer == "heat":
             overlay, iso, tmin, tmax = _temp_overlay(_bbox(), w, h, when=when, model_id=model_id)
             if overlay is not None:
@@ -1985,6 +2029,14 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
         try:
             canvas = _stack_below(canvas, _temp_bar(
                 w, trange[0], trange[1], legend.get("title", ""), legend.get("unit", "C")))
+        except Exception:
+            pass
+    elif legend and "pollen" in layers and trange:    # pollen risk scale (grains/m3)
+        try:
+            hi = max(20, math.ceil((trange[1] or 0) / 10.0) * 10)
+            canvas = _stack_below(canvas, _temp_bar(
+                w, 0, hi, legend.get("title", ""), unit="gr/m\u00b3",
+                color_fn=pollen_color, step=max(5, hi // 5)))
         except Exception:
             pass
     elif legend and "radar" in layers:    # generated bar (RainViewer has no scale image)
@@ -3136,6 +3188,7 @@ HELP = {
         "<b>Soil, air &amp; history</b>\n"
         "<code>soil Orsova</code> \u2014 soil moisture + temperature now\n"
         "<code>air Orsova</code> \u2014 air quality (European AQI + pollutants)\n"
+        "<code>polm Bucuresti</code> \u2014 pollen map (grass/ragweed/birch/\u2026)\n"
         "<code>flood Orsova</code> \u2014 river discharge forecast (GloFAS)\n"
         "<code>cote Orsova</code> \u2014 Danube/river water level (AFDJ / PegelOnline)\n"
         "<code>wind Orsova</code> \u2014 wind speed &amp; direction by height (10 m \u2026 ~3 km)\n"
@@ -3194,6 +3247,7 @@ HELP = {
         "<b>Sol, aer &amp; istoric</b>\n"
         "<code>soil Orsova</code> \u2014 umiditatea solului + temperatura acum\n"
         "<code>air Orsova</code> \u2014 calitatea aerului (AQI european + poluanti)\n"
+        "<code>polm Bucuresti</code> \u2014 harta polen (graminee/ambrozie/mesteacan/\u2026)\n"
         "<code>flood Orsova</code> \u2014 prognoza debit rau (GloFAS)\n"
         "<code>cote Orsova</code> \u2014 cota apei Dunarii/raurilor (AFDJ / PegelOnline)\n"
         "<code>wind Orsova</code> \u2014 viteza si directia vantului pe inaltimi (10 m \u2026 ~3 km)\n"
@@ -3406,6 +3460,61 @@ def cmd_heat(args, chat_id):
     # Temperature field sampled from Open-Meteo and coloured on the map.
     return _map_cmd(args, chat_id, ["heat"], "cap_heat",
                     src_key="map_src_clouds", legend_key="heat_legend")
+
+POLLEN_VARS = {
+    "grass": "grass_pollen", "graminee": "grass_pollen", "iarba": "grass_pollen",
+    "ragweed": "ragweed_pollen", "ambrozie": "ragweed_pollen", "ambrosia": "ragweed_pollen",
+    "birch": "birch_pollen", "mesteacan": "birch_pollen",
+    "alder": "alder_pollen", "anin": "alder_pollen",
+    "mugwort": "mugwort_pollen", "pelin": "mugwort_pollen",
+    "olive": "olive_pollen", "maslin": "olive_pollen",
+}
+POLLEN_LABEL = {"grass_pollen": "pol_grass", "ragweed_pollen": "pol_ragweed",
+                "birch_pollen": "pol_birch", "alder_pollen": "pol_alder",
+                "mugwort_pollen": "pol_mugwort", "olive_pollen": "pol_olive"}
+
+def cmd_polm(args, chat_id):
+    """Pollen map: polm <loc> [plant] [+ahead]. Plant defaults to grass."""
+    lang = get_lang(chat_id)
+    if not _PIL:
+        return tr("map_nopil", lang)
+    if not args:
+        return tr("polm_usage", lang)
+    toks = list(args)
+    ahead = None
+    if len(toks) > 1:
+        got = _parse_ahead(toks[-1])
+        if got is not None:
+            ahead = got; toks = toks[:-1]
+    var = "grass_pollen"
+    if len(toks) > 1 and toks[-1].lower() in POLLEN_VARS:
+        var = POLLEN_VARS[toks[-1].lower()]; toks = toks[:-1]
+    if not toks:
+        return tr("polm_usage", lang)
+    when = None
+    if ahead:
+        when = (datetime.now(timezone.utc) + timedelta(hours=ahead)).replace(
+            minute=0, second=0, microsecond=0)
+    loc, err = find_location(" ".join(toks), chat_id, lang)
+    if err:
+        return err
+    cfg = get_map_cfg(chat_id)
+    plant = tr(POLLEN_LABEL.get(var, "pol_grass"), lang)
+    try:
+        png, tlabel = build_map(loc["lat"], loc["lon"], ["pollen"], z=cfg["zoom"],
+                                base_dim=cfg["base_dim"], tz=cfg.get("tz", ""),
+                                legend={"title": plant + " (gr/m\u00b3)"}, when=when,
+                                theme=cfg.get("theme", MAP_THEME_DEFAULT), pollen_var=var)
+    except Exception as e:
+        return tr("err_generic", lang, e=e)
+    if not png:
+        return tr("map_nodata", lang)
+    cap = f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 {tr('cap_polm', lang, p=plant)}"
+    if ahead:
+        cap += " \u00b7 " + tr("map_forecast_in", lang, h=ahead)
+    cap += "\n" + (f"{tlabel} \u00b7 " if tlabel else "") + tr("map_src_pollen", lang)
+    cap += "\n\n" + tr("polm_legend", lang)
+    return Photo(png, cap)
 
 def cmd_map(args, chat_id):
     return _map_cmd(args, chat_id, ["clouds", "radar"], "cap_map",
@@ -3743,6 +3852,7 @@ COMMANDS = {
     "save": cmd_save, "locs": cmd_locs, "del": cmd_del, "alerts": cmd_alerts,
     "set": cmd_set, "units": cmd_units, "soil": cmd_soil, "hist": cmd_hist,
     "air": cmd_air, "aer": cmd_air, "flood": cmd_flood, "inundatii": cmd_flood,
+    "polm": cmd_polm, "polen": cmd_polm, "pollen": cmd_polm,
     "cote": cmd_cote, "river": cmd_cote, "dunare": cmd_cote, "nivel": cmd_cote,
     "marine": cmd_marine, "mare": cmd_marine, "wind": cmd_wind, "vant": cmd_wind,
     "lang": cmd_lang, "anm": cmd_anm, "alarm": cmd_alarm, "alarma": cmd_alarm,
