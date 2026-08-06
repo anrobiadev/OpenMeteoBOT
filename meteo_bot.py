@@ -956,20 +956,31 @@ WMO_RO = {
 
 def loc_label(loc):
     lbl = loc.get("name", "")
+    adm = _norm(loc.get("admin", "")) if loc.get("admin") else ""
+    abbr = JUDET_ABBR.get(adm, "")
+    if abbr:                                   # e.g. "Gura Vaii (BZ)"
+        lbl += f" ({abbr})"
     if loc.get("country"):
         lbl += f", {loc['country']}"
     return lbl
 
 # --- Open-Meteo: geocode city -> coordinates ---
-def geocode(city):
+def geocode(city, county=None):
     r = requests.get(GEO_URL, params={
-        "name": city, "count": 1, "language": "en", "format": "json"
+        "name": city, "count": 10, "language": "en", "format": "json"
     }, timeout=15)
     r.raise_for_status()
     res = r.json().get("results")
     if not res:
         return None
     g = res[0]
+    if county:                                 # pick the match in the given judet
+        cn = _norm(county)
+        cn = _ABBR_LOWER.get(cn, cn)      # accept 'BZ' as well as 'Buzau'
+        for cand in res:
+            adm = _norm(cand.get("admin1", ""))
+            if cn and (cn in adm or adm in cn):
+                g = cand; break
     return {"name": g["name"], "country": g.get("country", ""),
             "admin": g.get("admin1", ""), "lat": g["latitude"], "lon": g["longitude"]}
 
@@ -988,7 +999,8 @@ def coords_or_city(text):
     c = parse_coords(text)
     if c:
         return {"name": f"{c[0]:.4f},{c[1]:.4f}", "country": "", "lat": c[0], "lon": c[1]}
-    return geocode(text)
+    name, county = split_county(text)
+    return geocode(name, county)
 
 def parse_leading_coords(tokens):
     """Detect coordinates at the start of a token list, allowing
@@ -1033,6 +1045,35 @@ def _norm(s):
     s = "".join(c for c in s if not unicodedata.combining(c))
     return s.lower().strip()
 
+# Romanian county (judet) auto abbreviations, for disambiguating same-named towns.
+JUDET_ABBR = {
+    "alba": "AB", "arad": "AR", "arges": "AG", "bacau": "BC", "bihor": "BH",
+    "bistrita-nasaud": "BN", "bistrita nasaud": "BN", "botosani": "BT", "brasov": "BV",
+    "braila": "BR", "buzau": "BZ", "caras-severin": "CS", "caras severin": "CS",
+    "calarasi": "CL", "cluj": "CJ", "constanta": "CT", "covasna": "CV",
+    "dambovita": "DB", "dolj": "DJ", "galati": "GL", "giurgiu": "GR", "gorj": "GJ",
+    "harghita": "HR", "hunedoara": "HD", "ialomita": "IL", "iasi": "IS", "ilfov": "IF",
+    "maramures": "MM", "mehedinti": "MH", "mures": "MS", "neamt": "NT", "olt": "OT",
+    "prahova": "PH", "satu mare": "SM", "salaj": "SJ", "sibiu": "SB", "suceava": "SV",
+    "teleorman": "TR", "timis": "TM", "tulcea": "TL", "vaslui": "VS", "valcea": "VL",
+    "vrancea": "VN", "bucuresti": "B", "municipiul bucuresti": "B",
+}
+_ABBR_LOWER = {v.lower(): k for k, v in JUDET_ABBR.items()}   # "bz" -> "buzau"
+
+def split_county(text):
+    """Split 'Name, County' (or 'Name County' when the last word is a judet) into
+    (name, county). Returns (text, None) when no county qualifier is present."""
+    if "," in text:
+        a, b = text.rsplit(",", 1)
+        if a.strip():
+            return a.strip(), b.strip()
+    toks = text.split()
+    if len(toks) >= 2:
+        last = _norm(toks[-1])
+        if last in JUDET_ABBR or last in _ABBR_LOWER:
+            return " ".join(toks[:-1]), toks[-1]
+    return text, None
+
 def match_saved(text, chat_id):
     """Find saved locations whose name matches `text` (diacritic/case-insensitive).
     Tiered: exact, then prefix, then substring. Returns a list of (slot, loc)."""
@@ -1064,7 +1105,8 @@ def find_location(text, chat_id, lang):
     if len(m) > 1:
         names = ", ".join(loc_label(x[1]) for x in m)
         return None, tr("ambiguous", lang, names=names)
-    g = geocode(text)
+    name, county = split_county(text)
+    g = geocode(name, county)
     if g:
         return g, None
     return None, tr("loc_not_found", lang, loc=text)
@@ -2288,7 +2330,7 @@ def cmd_save(args, chat_id):
         if not loc:
             return tr("city_not_found", lang, city=loc_text)
         entry = {"name": loc["name"], "country": loc.get("country", ""),
-                 "lat": loc["lat"], "lon": loc["lon"]}
+                 "admin": loc.get("admin", ""), "lat": loc["lat"], "lon": loc["lon"]}
     def m(state):
         state.setdefault(str(chat_id), {}).setdefault("locations", {})[slot] = entry
     update_state(m)
