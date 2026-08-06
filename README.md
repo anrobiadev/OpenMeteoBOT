@@ -427,7 +427,7 @@ rm -rf ~/OpenMeteoBot/wa_auth
 | `soil Orsova` | Soil moisture + temperature, now |
 | `air Orsova` | Air quality — European AQI + PM2.5/PM10/O₃/NO₂/SO₂/CO + UV, each explained in plain language |
 | `flood Orsova [days]` | River-discharge (flood) forecast, GloFAS |
-| `cote Orsova` | Danube/river water level at the nearest gauge — level (cm), 24h change, water temp, 48h INHGA outlook. Romanian Danube from **AFDJ** (afdj.ro); German waterways fall back to **WSV PegelOnline**. For Romanian inland rivers it shows the latest **INHGA** national forecast (hidro.ro). Also `river` / `dunare` / `nivel`; type `cote` alone to use saved slot 1 |
+| `cote Orsova` | Danube/river water level at the nearest gauge — level (cm), 24h change, water temp, 48h INHGA outlook. Romanian Danube from **AFDJ** (afdj.ro); German waterways fall back to **WSV PegelOnline**. For rivers and the Danube inside Romania it reports the nearest of ~750 **INHGA** hydrometric gauges (hidro.ro): level H in cm, 24h change and status vs. the defence levels; if none is near, it falls back to the INHGA national river forecast. Also `river` / `dunare` / `nivel`; type `cote` alone to use saved slot 1 |
 | `wind Orsova` | Wind speed + direction at 10/80/120/180 m, plus higher levels (~300 m to ~3 km above ground, from pressure levels), gusts, and the next hours |
 | `wind Orsova uas` | UAS band: 250–800 m above ground, every 100 m (custom: `wind Orsova 300-600`) |
 | `marine Constanta` | Sea state — wave height/period/direction, swell, wind waves, sea-surface temperature |

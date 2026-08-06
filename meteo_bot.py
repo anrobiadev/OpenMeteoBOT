@@ -122,6 +122,8 @@ RIVER_MAX_KM = float(os.environ.get("TG_RIVER_MAX_KM", "80"))      # nearest-gau
 INHGA_RIVERS_URL = os.environ.get("TG_INHGA_URL",
     "https://www.hidro.ro/bulletin_type/prognoza-hidrologica-pentru-rauri/")
 RO_BBOX = (43.4, 20.2, 48.3, 30.1)   # latS, lonW, latN, lonE (Romania + Moldova, rough)
+INHGA_MAP_URL = os.environ.get("TG_INHGA_MAP_URL", "https://www.hidro.ro/prognoze/")
+_INHGA_MAP_CACHE = {"t": 0.0, "data": None}   # the /prognoze/ page is ~750 KB -> cache it
 # AFDJ Danube gauge coordinates (from afdj.ro/ro/cotele-dunarii; XML has no coords).
 DAILY_MAX = 16  # Open-Meteo daily forecast horizon
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -614,6 +616,15 @@ T = {
                             "warning levels). INHGA publishes no open per-gauge cm feed.",
                       "ro": "Prognoză națională pe bazine (tendință + starea față de "
                             "cotele de atenție). INHGA nu are feed deschis cu cote în cm pe stație."},
+    "river_inhga_src": {"en": "source: INHGA hydrometric network (hidro.ro)",
+                        "ro": "sursa: rețeaua hidrometrică INHGA (hidro.ro)"},
+    "river_h": {"en": "Level H = {v}  (24h {d} cm {tr})",
+                "ro": "Cota H = {v}  (24h {d} cm {tr})"},
+    "river_updated": {"en": "\U0001f552 {t}", "ro": "\U0001f552 {t}"},
+    "river_inhga_note": {"en": "H = gauge reading vs. its local zero (negative in drought); "
+                               "status is relative to INHGA defence levels. ~750 river & Danube gauges.",
+                         "ro": "H = citirea la miră față de zero mira (negativă la secetă); "
+                               "starea e față de cotele de apărare INHGA. ~750 stații pe râuri și Dunăre."},
     "flood_rising": {"en": "rising ↗", "ro": "in crestere ↗"},
     "flood_falling": {"en": "falling ↘", "ro": "in scadere ↘"},
     "flood_steady": {"en": "steady →", "ro": "stabil →"},
@@ -2799,6 +2810,86 @@ def _river_from_pegel(lat, lon, lang):
              "\n<i>" + tr("river_note", lang) + "</i>"]
     return "\n".join(lines)
 
+def _js_json_var(html_txt, varname):
+    """Pull `var <name> = JSON.parse('...')` embedded in the page and decode it."""
+    key = "var " + varname + " = JSON.parse('"
+    i = html_txt.find(key)
+    if i < 0:
+        return None
+    i += len(key)
+    j = html_txt.find("')", i)
+    if j < 0:
+        return None
+    try:
+        return json.loads(html_txt[i:j].replace("\\'", "'"))
+    except (ValueError, TypeError):
+        return None
+
+def inhga_map_stations():
+    """~750 INHGA river & Danube gauges with live level, read from the /prognoze/
+    page (data is inlined as JS vars, not a separate API). Cached ~30 min."""
+    now = time.time()
+    if _INHGA_MAP_CACHE["data"] is not None and now - _INHGA_MAP_CACHE["t"] < 1800:
+        return _INHGA_MAP_CACHE["data"]
+    try:
+        r = requests.get(INHGA_MAP_URL, timeout=25, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        r.encoding = "utf-8"
+        html_txt = r.text
+    except (requests.RequestException, ValueError):
+        return _INHGA_MAP_CACHE["data"] or []
+    stations = _js_json_var(html_txt, "stations")      # [{title,lat,lng,idomm}]
+    values = _js_json_var(html_txt, "station_data")    # {code: {TEXT1,TEXT2,TEXT3,...}}
+    if not stations or not values:
+        return _INHGA_MAP_CACHE["data"] or []
+    out = []
+    for s in stations:
+        d = values.get(str(s.get("idomm")))
+        if not d:
+            continue
+        hm = re.search(r"H=\s*(-?\d+)", d.get("TEXT1") or "")
+        if not hm:
+            continue
+        vm = re.search(r"nivel\s*=\s*(-?\d+)", d.get("TEXT2") or "")
+        rv = re.search(r"\bR\.\s*(.+)$", d.get("DENUMIRE_STATIE") or "")
+        out.append({"name": s.get("title", ""), "lat": s.get("lat"), "lon": s.get("lng"),
+                    "river": rv.group(1).strip().title() if rv else "",
+                    "h": int(hm.group(1)), "var": int(vm.group(1)) if vm else None,
+                    "status": (d.get("TEXT3") or "").strip(),
+                    "dep": d.get("COD_DEP_COTE", 0) or 0, "data": (d.get("DATA") or "")[:16]})
+    _INHGA_MAP_CACHE["t"] = now
+    _INHGA_MAP_CACHE["data"] = out
+    return out
+
+_DEP_EMOJI = {0: "\U0001f7e2", 1: "\U0001f7e1", 2: "\U0001f7e0", 3: "\U0001f534"}
+
+def _river_from_inhga_map(lat, lon, lang):
+    """Nearest INHGA river/Danube gauge (cm) to the point, from the /prognoze/ map."""
+    best, bestd = None, 1e9
+    for st in inhga_map_stations():
+        if st["lat"] is None:
+            continue
+        d = haversine_km(lat, lon, st["lat"], st["lon"])
+        if d < bestd:
+            best, bestd = st, d
+    if not best or bestd > RIVER_MAX_KM:
+        return None
+    var = best["var"]
+    arrow = ("\u2192" if not var else ("\u2197" if var > 0 else "\u2198"))
+    title = best["name"] + (f" ({best['river']})" if best["river"] else "")
+    emoji = _DEP_EMOJI.get(best["dep"], "\U0001f7e2")
+    lines = [f"\U0001f30a <b>{title}</b> \u2014 {tr('river_title', lang)}",
+             tr("river_inhga_src", lang) + "\n",
+             f"{emoji} " + tr("river_h", lang, v=f"<b>{best['h']} cm</b>",
+                d=f"{var:+d}" if var is not None else "\u2014", tr=arrow)]
+    if best["status"]:
+        lines.append(best["status"])
+    if best["data"]:
+        lines.append(tr("river_updated", lang, t=best["data"]))
+    lines.append(tr("river_near", lang, d=f"{bestd:.0f}"))
+    lines.append("\n<i>" + tr("river_inhga_note", lang) + "</i>")
+    return "\n".join(lines)
+
 def _in_romania(lat, lon):
     s, w, n, e = RO_BBOX
     return s <= lat <= n and w <= lon <= e
@@ -2815,6 +2906,7 @@ def inhga_river_bulletin():
     try:
         r = requests.get(INHGA_RIVERS_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
+        r.encoding = "utf-8"           # hidro.ro sends no charset -> force UTF-8
         idx = r.text
     except (requests.RequestException, ValueError):
         return None
@@ -2825,6 +2917,7 @@ def inhga_river_bulletin():
     try:
         rr = requests.get(m.group(1), timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         rr.raise_for_status()
+        rr.encoding = "utf-8"
         page = rr.text
     except (requests.RequestException, ValueError):
         return None
@@ -2872,8 +2965,10 @@ def cmd_cote(args, chat_id):
         country = (loc.get("country") or "").lower()
         ro = (("romania" in country or "moldova" in country) if country
               else _in_romania(loc["lat"], loc["lon"]))
-        if ro:                                                 # Romanian inland rivers (INHGA)
-            res = _river_from_inhga(loc["lat"], loc["lon"], lang)
+        if ro:                                                 # Romanian rivers & Danube (INHGA)
+            res = _river_from_inhga_map(loc["lat"], loc["lon"], lang)   # per-gauge cm
+            if res is None:
+                res = _river_from_inhga(loc["lat"], loc["lon"], lang)   # national bulletin
     return res if res is not None else tr("river_none", lang)
 
 def cmd_hist(args, chat_id):
