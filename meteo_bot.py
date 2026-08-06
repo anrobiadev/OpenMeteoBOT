@@ -582,6 +582,27 @@ T = {
     "aqi_poor": {"en": "poor", "ro": "slab"},
     "aqi_vpoor": {"en": "very poor", "ro": "foarte slab"},
     "aqi_epoor": {"en": "extremely poor", "ro": "extrem de slab"},
+    # air groups + extra params + pollen
+    "air_g_particulate": {"en": "Particulate", "ro": "Particule"},
+    "air_g_gases": {"en": "Gases", "ro": "Gaze"},
+    "air_g_uv": {"en": "UV", "ro": "UV"},
+    "air_g_pollen": {"en": "Pollen", "ro": "Polen"},
+    "air_dust": {"en": "Dust", "ro": "Praf"},
+    "air_aod": {"en": "Aerosols (AOD)", "ro": "Aerosoli (AOD)"},
+    "air_uv_clear": {"en": "UV clear sky", "ro": "UV cer senin"},
+    "air_pollen_none": {"en": "Pollen: no data (only in Europe, in season).",
+                        "ro": "Polen: fara date (doar in Europa, in sezon)."},
+    "pol_alder": {"en": "Alder", "ro": "Anin"},
+    "pol_birch": {"en": "Birch", "ro": "Mesteacan"},
+    "pol_grass": {"en": "Grass", "ro": "Graminee"},
+    "pol_mugwort": {"en": "Mugwort", "ro": "Pelin"},
+    "pol_olive": {"en": "Olive", "ro": "Maslin"},
+    "pol_ragweed": {"en": "Ragweed", "ro": "Ambrozie"},
+    "pol_none": {"en": "none", "ro": "absent"},
+    "pol_low": {"en": "low", "ro": "scazut"},
+    "pol_mod": {"en": "moderate", "ro": "moderat"},
+    "pol_high": {"en": "high", "ro": "ridicat"},
+    "pol_vhigh": {"en": "very high", "ro": "foarte ridicat"},
     # flood / river discharge
     "flood_usage": {"en": "Usage: <code>flood Orsova [days]</code> (river discharge forecast)",
                     "ro": "Utilizare: <code>flood Orsova [zile]</code> (prognoza debit rau)"},
@@ -2395,6 +2416,15 @@ def eaqi_band(aqi, lang):
     if a <= 100:  return ("\U0001f534", tr("aqi_vpoor", lang))
     return ("\U0001f7e3", tr("aqi_epoor", lang))
 
+def pollen_level(x, lang):
+    """Very rough pollen risk band (grains/m3), generic across plants."""
+    x = float(x)
+    if x <= 0:   return tr("pol_none", lang)
+    if x < 10:   return tr("pol_low", lang)
+    if x < 30:   return tr("pol_mod", lang)
+    if x < 100:  return tr("pol_high", lang)
+    return tr("pol_vhigh", lang)
+
 def cmd_air(args, chat_id):
     lang = get_lang(chat_id)
     if not args:
@@ -2402,36 +2432,74 @@ def cmd_air(args, chat_id):
     loc, err = find_location(" ".join(args), chat_id, lang)
     if err:
         return err
-    params = {
-        "latitude": loc["lat"], "longitude": loc["lon"], "timezone": "auto",
-        "current": "european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,"
-                   "sulphur_dioxide,carbon_monoxide,uv_index",
-    }
+    fields = ("european_aqi,us_aqi,pm2_5,pm10,dust,aerosol_optical_depth,"
+              "ozone,nitrogen_dioxide,sulphur_dioxide,carbon_monoxide,"
+              "carbon_dioxide,ammonia,methane,uv_index,uv_index_clear_sky,"
+              "alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,"
+              "olive_pollen,ragweed_pollen")
+    params = {"latitude": loc["lat"], "longitude": loc["lon"],
+              "timezone": "auto", "current": fields}
     r = requests.get(AQI_URL, params=params, timeout=15)
     r.raise_for_status()
     cur = r.json().get("current", {})
     if not cur:
         return tr("air_nodata", lang)
-    emoji, label = eaqi_band(cur.get("european_aqi"), lang)
-    aqi = cur.get("european_aqi")
-    aqi_s = f"{round(aqi)}" if aqi is not None else "\u2014"
 
+    ug = " µg/m³"
     def v(key, unit, dec=0):
         x = cur.get(key)
-        return f"<b>{x:.{dec}f}{unit}</b>" if isinstance(x, (int, float)) else "<b>\u2014</b>"
+        return f"<b>{x:.{dec}f}{unit}</b>" if isinstance(x, (int, float)) else None
 
+    emoji, label = eaqi_band(cur.get("european_aqi"), lang)
+    aqi = cur.get("european_aqi"); us = cur.get("us_aqi")
+    aqi_s = f"{round(aqi)}" if isinstance(aqi, (int, float)) else "—"
+    us_s = f"  ·  US AQI <b>{round(us)}</b>" if isinstance(us, (int, float)) else ""
     t = cur.get("time", "")
-    lines = [f"\U0001f4cd <b>{loc_label(loc)}</b> \u2014 {tr('air_title', lang)}",
+    lines = [f"\U0001f4cd <b>{loc_label(loc)}</b> — {tr('air_title', lang)}",
              tr("air_time_src", lang, t=t[-5:] if len(t) >= 5 else "") + "\n",
-             f"{emoji} <b>EAQI {aqi_s}</b> \u2014 {label}",
-             tr("air_pm25", lang, v=v("pm2_5", " \u00b5g/m\u00b3", 1)),
-             tr("air_pm10", lang, v=v("pm10", " \u00b5g/m\u00b3", 1)),
-             tr("air_o3", lang, v=v("ozone", " \u00b5g/m\u00b3")),
-             tr("air_no2", lang, v=v("nitrogen_dioxide", " \u00b5g/m\u00b3")),
-             tr("air_so2", lang, v=v("sulphur_dioxide", " \u00b5g/m\u00b3")),
-             tr("air_co", lang, v=v("carbon_monoxide", " \u00b5g/m\u00b3")),
-             tr("air_uv", lang, v=v("uv_index", "", 1)),
-             "\n<i>" + tr("air_legend", lang) + "</i>"]
+             f"{emoji} <b>EAQI {aqi_s}</b> — {label}{us_s}"]
+
+    def group(title_key, rows):
+        got = [f"{lbl}: {val}" for lbl, val in rows if val]
+        if got:
+            lines.append("\n<b>" + tr(title_key, lang) + "</b>")
+            lines.extend(got)
+
+    group("air_g_particulate", [
+        ("PM2.5", v("pm2_5", ug, 1)),
+        ("PM10", v("pm10", ug, 1)),
+        (tr("air_dust", lang), v("dust", ug)),
+        (tr("air_aod", lang), v("aerosol_optical_depth", "", 2)),
+    ])
+    group("air_g_gases", [
+        ("O₃", v("ozone", ug)),
+        ("NO₂", v("nitrogen_dioxide", ug)),
+        ("SO₂", v("sulphur_dioxide", ug)),
+        ("CO", v("carbon_monoxide", ug)),
+        ("CO₂", v("carbon_dioxide", " ppm")),
+        ("NH₃", v("ammonia", ug)),
+        ("CH₄", v("methane", ug)),
+    ])
+    group("air_g_uv", [
+        ("UV", v("uv_index", "", 1)),
+        (tr("air_uv_clear", lang), v("uv_index_clear_sky", "", 1)),
+    ])
+
+    pollens = (("alder_pollen", "pol_alder"), ("birch_pollen", "pol_birch"),
+               ("grass_pollen", "pol_grass"), ("mugwort_pollen", "pol_mugwort"),
+               ("olive_pollen", "pol_olive"), ("ragweed_pollen", "pol_ragweed"))
+    pol = []
+    for key, lblkey in pollens:
+        x = cur.get(key)
+        if isinstance(x, (int, float)):
+            pol.append(f"{tr(lblkey, lang)}: <b>{x:.0f}</b> — {pollen_level(x, lang)}")
+    if pol:
+        lines.append("\n<b>" + tr("air_g_pollen", lang) + "</b> <i>(grains/m³)</i>")
+        lines.extend(pol)
+    else:
+        lines.append("\n<i>" + tr("air_pollen_none", lang) + "</i>")
+
+    lines.append("\n<i>" + tr("air_legend", lang) + "</i>")
     return "\n".join(lines)
 
 # --- Flood / river discharge (Open-Meteo Flood API, GloFAS) ---
