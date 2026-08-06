@@ -2846,7 +2846,7 @@ def _river_from_afdj(lat, lon, lang):
         lines.append(tr("river_km", lang, km=f"{best['km']:g}"))
     lines.append(tr("river_near", lang, d=f"{bestd:.0f}"))
     lines.append("\n<i>" + tr("river_note", lang) + "</i>")
-    return "\n".join(lines)
+    return bestd, "\n".join(lines)
 
 def _river_from_pegel(lat, lon, lang):
     try:
@@ -2876,7 +2876,7 @@ def _river_from_pegel(lat, lon, lang):
              tr("river_level_p", lang, v=f"<b>{cm:.0f} cm</b>", st=st or "—"),
              tr("river_near", lang, d=f"{bestd:.0f}"),
              "\n<i>" + tr("river_note", lang) + "</i>"]
-    return "\n".join(lines)
+    return bestd, "\n".join(lines)
 
 def _js_json_var(html_txt, varname):
     """Pull `var <name> = JSON.parse('...')` embedded in the page and decode it."""
@@ -2956,7 +2956,7 @@ def _river_from_inhga_map(lat, lon, lang):
         lines.append(tr("river_updated", lang, t=best["data"]))
     lines.append(tr("river_near", lang, d=f"{bestd:.0f}"))
     lines.append("\n<i>" + tr("river_inhga_note", lang) + "</i>")
-    return "\n".join(lines)
+    return bestd, "\n".join(lines)
 
 def _in_romania(lat, lon):
     s, w, n, e = RO_BBOX
@@ -3026,18 +3026,31 @@ def cmd_cote(args, chat_id):
         loc, err = find_location(" ".join(args), chat_id, lang)
         if err:
             return err
-    res = _river_from_afdj(loc["lat"], loc["lon"], lang)   # Romanian Danube first
-    if res is None:
-        res = _river_from_pegel(loc["lat"], loc["lon"], lang)   # German waterways
-    if res is None:
-        country = (loc.get("country") or "").lower()
-        ro = (("romania" in country or "moldova" in country) if country
-              else _in_romania(loc["lat"], loc["lon"]))
-        if ro:                                                 # Romanian rivers & Danube (INHGA)
-            res = _river_from_inhga_map(loc["lat"], loc["lon"], lang)   # per-gauge cm
-            if res is None:
-                res = _river_from_inhga(loc["lat"], loc["lon"], lang)   # national bulletin
-    return res if res is not None else tr("river_none", lang)
+    lat, lon = loc["lat"], loc["lon"]
+    country = (loc.get("country") or "").lower()
+    ro = (("romania" in country or "moldova" in country) if country
+          else _in_romania(lat, lon))
+    # Nearest gauge from every relevant source, then the closest overall (so a
+    # nearby river beats the Danube 15 km away). AFDJ gets a small bias so the
+    # Danube itself keeps its richer AFDJ reading on near-ties.
+    cands = []
+    a = _river_from_afdj(lat, lon, lang)
+    if a:
+        cands.append((a[0] - 1.0, a[1]))
+    p = _river_from_pegel(lat, lon, lang)
+    if p:
+        cands.append((p[0], p[1]))
+    if ro:
+        m = _river_from_inhga_map(lat, lon, lang)   # ~750 river & Danube gauges (cm)
+        if m:
+            cands.append((m[0], m[1]))
+    if cands:
+        return min(cands, key=lambda c: c[0])[1]
+    if ro:
+        b = _river_from_inhga(lat, lon, lang)       # national bulletin, last resort
+        if b:
+            return b
+    return tr("river_none", lang)
 
 def cmd_hist(args, chat_id):
     lang = get_lang(chat_id)
