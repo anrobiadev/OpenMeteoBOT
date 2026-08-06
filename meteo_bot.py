@@ -86,6 +86,8 @@ except Exception:
     _PIL = False
 from datetime import datetime, timezone, timedelta
 
+__version__ = "2.1.0"
+
 # --- Config ---
 # systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
 # so nothing is stored and no sudoers editing is needed).
@@ -623,6 +625,7 @@ T = {
     "aqi_poor": {"en": "poor", "ro": "slab"},
     "aqi_vpoor": {"en": "very poor", "ro": "foarte slab"},
     "aqi_epoor": {"en": "extremely poor", "ro": "extrem de slab"},
+    "version_msg": {"en": "OpenMeteoBot v{v}", "ro": "OpenMeteoBot v{v}"},
     # air groups + extra params + pollen
     "air_g_particulate": {"en": "Particulate", "ro": "Particule"},
     "air_g_gases": {"en": "Gases", "ro": "Gaze"},
@@ -3450,6 +3453,10 @@ HELP = {
     ),
 }
 
+def cmd_version(args, chat_id):
+    lang = get_lang(chat_id)
+    return tr("version_msg", lang, v=__version__)
+
 def cmd_start(args, chat_id):
     return HELP.get(get_lang(chat_id), HELP["en"])
 
@@ -4019,6 +4026,7 @@ COMMANDS = {
     "hum": cmd_hum, "humidity": cmd_hum, "umiditate": cmd_hum,
     "thm": cmd_theme, "theme": cmd_theme, "tema": cmd_theme,
     "start": cmd_start, "help": cmd_start,
+    "version": cmd_version, "versiune": cmd_version, "v": cmd_version,
 }
 
 def handle_text(text, chat_id, lang_hint=None):

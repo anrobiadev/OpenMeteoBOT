@@ -644,3 +644,23 @@ warning text and color come straight from ANM.
   ideally with a secondary number.
 - Do **not** commit secrets or runtime state to git — see `.gitignore`
   (`meteobot.env`, `bot_state.json`, `wa_state.json`, `wa_auth/`, `node_modules/`).
+
+---
+
+## Versioning & releases
+
+The bot follows **`MAJOR.MINOR.PATCH`** (current: **v2.1.0** — send `version` to the
+bot to check). Every time the **minor** number changes (e.g. `2.1.x → 2.2.0`) a
+GitHub **Release** is published with the interactive installer attached as
+**`install_vMAJOR.MINOR.0.sh`**, so anyone can grab a self-contained setup script
+for that version:
+
+```bash
+# fetch and run the installer for a specific release
+curl -fsSLO https://github.com/anrobiadev/OpenMeteoBOT/releases/download/v2.1.0/install_v2.1.0.sh
+chmod +x install_v2.1.0.sh
+./install_v2.1.0.sh
+```
+
+The repo always keeps a single `install.sh`; each release just ships a versioned
+copy of it. Patch releases (`2.1.1`, …) don't require a new installer.
