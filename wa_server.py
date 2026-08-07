@@ -94,6 +94,8 @@ def alert_loop():
                 for slot, loc in locations.items():
                     for m in core.anm_alerts_for(chat_id, slot, loc, anm_areas, lang):
                         wa_send(chat_id, to_whatsapp(m))
+                    for m in core.pollen_alerts_for(chat_id, slot, loc, thr, lang):
+                        wa_send(chat_id, to_whatsapp(m))
                     try:
                         data = core.fetch_alert_forecast(loc["lat"], loc["lon"], model_id)
                     except requests.RequestException:

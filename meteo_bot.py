@@ -86,7 +86,7 @@ except Exception:
     _PIL = False
 from datetime import datetime, timezone, timedelta
 
-__version__ = "2.1.2"
+__version__ = "2.2.0"
 
 # --- Config ---
 # systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
@@ -202,8 +202,10 @@ ANM_COLORS = {
 DEFAULT_THRESHOLDS = {
     "gust": float(GUST_KMH), "rain": float(RAIN_MM_H), "snow": float(SNOW_CM_H),
     "heat": float(HEAT_C), "frost": float(FROST_C),
+    "pollen": float(os.environ.get("TG_POLLEN_ALERT", "0")),   # 0 = off; gr/m3
 }
-THRESH_UNIT = {"gust": "km/h", "rain": "mm/h", "snow": "cm/h", "heat": "\u00b0C", "frost": "\u00b0C"}
+THRESH_UNIT = {"gust": "km/h", "rain": "mm/h", "snow": "cm/h", "heat": "\u00b0C",
+               "frost": "\u00b0C", "pollen": "gr/m\u00b3"}
 
 # --- Open-Meteo models: short name -> (API id, description) ---
 # Weather models available through the Open-Meteo Forecast API (`models=` parameter).
@@ -639,6 +641,15 @@ T = {
     "air_dust": {"en": "Dust", "ro": "Praf"},
     "air_aod": {"en": "Aerosols (AOD)", "ro": "Aerosoli (AOD)"},
     "air_uv_clear": {"en": "UV clear sky", "ro": "UV cer senin"},
+    "thr_pollen_note": {"en": "pollen alert: <code>set pollen 30</code> (grains/m³; 0 = off).",
+                        "ro": "alertă polen: <code>set pollen 30</code> (grăunți/m³; 0 = oprit)."},
+    "al_pollen": {"en": "🌿 Pollen ≥ {lim} gr/m³: {parts}",
+                  "ro": "🌿 Polen ≥ {lim} gr/m³: {parts}"},
+    "air_danger_note": {
+        "en": "Band per pollutant: 🟢 good · 🟡 moderate · 🟠 poor · 🔴 very poor · 🟣 extremely poor. "
+              "Harm starts at 🟠 poor (sensitive groups) and is unhealthy for everyone at 🔴/🟣.",
+        "ro": "Nivel pe poluant: 🟢 bun · 🟡 moderat · 🟠 slab · 🔴 foarte slab · 🟣 extrem. "
+              "Pericolul începe la 🟠 slab (persoane sensibile) și devine nesănătos pentru toți la 🔴/🟣."},
     "air_pollen_none": {"en": "Pollen: no data (only in Europe, in season).",
                         "ro": "Polen: fara date (doar in Europa, in sezon)."},
     "polm_usage": {"en": "Usage: <code>polm Bucuresti [plant]</code> — plant: grass, ragweed, birch, alder, mugwort, olive",
@@ -2519,9 +2530,10 @@ def cmd_set(args, chat_id):
     thr = get_thresholds(chat_id)
     if not args:
         lines = [tr("thr_current", lang)]
-        for p in ("gust", "rain", "snow", "heat", "frost"):
+        for p in ("gust", "rain", "snow", "heat", "frost", "pollen"):
             lines.append(f"<code>{p}</code> {thr[p]:g} {THRESH_UNIT[p]}")
-        lines.append("\n" + tr("thr_change", lang))
+        lines.append("\n" + tr("thr_pollen_note", lang))
+        lines.append(tr("thr_change", lang))
         return "\n".join(lines)
     param = args[0].lower()
     if param not in DEFAULT_THRESHOLDS:
@@ -2614,6 +2626,27 @@ def cmd_soil(args, chat_id):
 # --- Air quality (Open-Meteo Air Quality API) ---
 # European AQI bands (EEA): 0-20 good, 20-40 fair, 40-60 moderate, 60-80 poor,
 # 80-100 very poor, 100+ extremely poor.
+# EAQI sub-index breakpoints per pollutant (µg/m³), EEA hourly scale. Upper bound
+# of good/fair/moderate/poor/very-poor; above the last -> extremely poor.
+EAQI_BANDS = {
+    "pm2_5": [10, 20, 25, 50, 75], "pm10": [20, 40, 50, 100, 150],
+    "nitrogen_dioxide": [40, 90, 120, 230, 340], "ozone": [50, 100, 130, 240, 380],
+    "sulphur_dioxide": [100, 200, 350, 500, 750],
+}
+_EAQI_LABEL_KEYS = ["aqi_good", "aqi_fair", "aqi_moderate", "aqi_poor", "aqi_vpoor", "aqi_epoor"]
+_EAQI_EMOJI = ["\U0001f7e2", "\U0001f7e2", "\U0001f7e1", "\U0001f7e0", "\U0001f534", "\U0001f7e3"]
+
+def pollutant_band(key, v, lang):
+    """EAQI band label + emoji for a single pollutant value ('' if unknown)."""
+    b = EAQI_BANDS.get(key)
+    if not b or not isinstance(v, (int, float)):
+        return ""
+    idx = 0
+    for i, thr in enumerate(b):
+        if v > thr:
+            idx = i + 1
+    return _EAQI_EMOJI[idx] + " " + tr(_EAQI_LABEL_KEYS[idx], lang)
+
 def eaqi_band(aqi, lang):
     if aqi is None:
         return ("\u2754", tr("aqi_unknown", lang))
@@ -2655,9 +2688,16 @@ def cmd_air(args, chat_id):
         return tr("air_nodata", lang)
 
     ug = " µg/m³"
-    def v(key, unit, dec=0):
+    def v(key, unit, dec=0, band=False):
         x = cur.get(key)
-        return f"<b>{x:.{dec}f}{unit}</b>" if isinstance(x, (int, float)) else None
+        if not isinstance(x, (int, float)):
+            return None
+        s = f"<b>{x:.{dec}f}{unit}</b>"
+        if band:
+            bd = pollutant_band(key, x, lang)
+            if bd:
+                s += f" — {bd}"
+        return s
 
     emoji, label = eaqi_band(cur.get("european_aqi"), lang)
     aqi = cur.get("european_aqi"); us = cur.get("us_aqi")
@@ -2675,15 +2715,15 @@ def cmd_air(args, chat_id):
             lines.extend(got)
 
     group("air_g_particulate", [
-        ("PM2.5", v("pm2_5", ug, 1)),
-        ("PM10", v("pm10", ug, 1)),
+        ("PM2.5", v("pm2_5", ug, 1, band=True)),
+        ("PM10", v("pm10", ug, 1, band=True)),
         (tr("air_dust", lang), v("dust", ug)),
         (tr("air_aod", lang), v("aerosol_optical_depth", "", 2)),
     ])
     group("air_g_gases", [
-        ("O₃", v("ozone", ug)),
-        ("NO₂", v("nitrogen_dioxide", ug)),
-        ("SO₂", v("sulphur_dioxide", ug)),
+        ("O₃", v("ozone", ug, band=True)),
+        ("NO₂", v("nitrogen_dioxide", ug, band=True)),
+        ("SO₂", v("sulphur_dioxide", ug, band=True)),
         ("CO", v("carbon_monoxide", ug)),
         ("CO₂", v("carbon_dioxide", " ppm")),
         ("NH₃", v("ammonia", ug)),
@@ -2709,6 +2749,7 @@ def cmd_air(args, chat_id):
         lines.append("\n<i>" + tr("air_pollen_none", lang) + "</i>")
 
     lines.append("\n<i>" + tr("air_legend", lang) + "</i>")
+    lines.append("<i>" + tr("air_danger_note", lang) + "</i>")
     return "\n".join(lines)
 
 # --- Flood / river discharge (Open-Meteo Flood API, GloFAS) ---
@@ -4167,6 +4208,41 @@ def is_allowed(user_id, chat_id):
     return str(user_id) in ALLOWED_USERS or str(chat_id) in ALLOWED_USERS
 
 # --- Background alert checker ---
+POLLEN_ALERT_VARS = ("alder_pollen", "birch_pollen", "grass_pollen",
+                     "mugwort_pollen", "olive_pollen", "ragweed_pollen")
+
+def current_pollen(lat, lon):
+    try:
+        r = requests.get(AQI_URL, params={"latitude": lat, "longitude": lon,
+            "timezone": "auto", "current": ",".join(POLLEN_ALERT_VARS)}, timeout=15)
+        r.raise_for_status()
+        return r.json().get("current", {}) or {}
+    except (requests.RequestException, ValueError):
+        return {}
+
+def pollen_alerts_for(chat_id, slot, loc, thr, lang):
+    """Proactive pollen alert when any plant is at/above the user's threshold.
+    Threshold 0 = disabled. Sent at most once per slot per day."""
+    limit = thr.get("pollen", 0) or 0
+    if limit <= 0:
+        return []
+    cur = current_pollen(loc["lat"], loc["lon"])
+    if not cur:
+        return []
+    over = [(var, cur[var]) for var in POLLEN_ALERT_VARS
+            if isinstance(cur.get(var), (int, float)) and cur[var] >= limit]
+    if not over:
+        return []
+    today = (cur.get("time", "") or "")[:10]
+    key = f"{slot}:pollen:{today}"
+    if already_sent(chat_id, key):
+        return []
+    mark_sent(chat_id, key, today)
+    parts = ", ".join(f"{tr(POLLEN_LABEL.get(var, 'pol_grass'), lang)} <b>{val:.0f}</b>"
+                      for var, val in sorted(over, key=lambda x: -x[1]))
+    return ["\u26a0\ufe0f <b>" + loc_label(loc) + "</b>\n" +
+            tr("al_pollen", lang, parts=parts, lim=f"{limit:g}")]
+
 def alert_loop():
     while True:
         try:
@@ -4184,6 +4260,8 @@ def alert_loop():
                 lang = get_lang(chat_id)
                 for slot, loc in locations.items():
                     for m in anm_alerts_for(chat_id, slot, loc, anm_areas, lang):
+                        send(chat_id, m)
+                    for m in pollen_alerts_for(chat_id, slot, loc, thr, lang):
                         send(chat_id, m)
                     try:
                         data = fetch_alert_forecast(loc["lat"], loc["lon"], model_id)
