@@ -86,7 +86,7 @@ except Exception:
     _PIL = False
 from datetime import datetime, timezone, timedelta
 
-__version__ = "2.2.1"
+__version__ = "2.2.2"
 
 # --- Config ---
 # systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
@@ -3480,7 +3480,8 @@ HELP = {
         "<b>Soil, air &amp; history</b>\n"
         "<code>soil Orsova</code> \u2014 soil moisture + temperature now\n"
         "<code>air Orsova</code> \u2014 air quality (European AQI + pollutants)\n"
-        "<code>polm Bucuresti</code> \u2014 pollen map (grass/ragweed/birch/\u2026)\n"
+        "<code>polm Bucuresti ragweed</code> \u2014 pollen map; pick the plant: "
+        "grass, ragweed, birch, alder, mugwort, olive (default grass)\n"
         "<code>flood Orsova</code> \u2014 river discharge forecast (GloFAS)\n"
         "<code>cote Orsova</code> \u2014 Danube/river water level (AFDJ / PegelOnline)\n"
         "<code>wind Orsova</code> \u2014 wind speed &amp; direction by height (10 m \u2026 ~3 km)\n"
@@ -3539,7 +3540,8 @@ HELP = {
         "<b>Sol, aer &amp; istoric</b>\n"
         "<code>soil Orsova</code> \u2014 umiditatea solului + temperatura acum\n"
         "<code>air Orsova</code> \u2014 calitatea aerului (AQI european + poluanti)\n"
-        "<code>polm Bucuresti</code> \u2014 harta polen (graminee/ambrozie/mesteacan/\u2026)\n"
+        "<code>polm Bucuresti ambrozie</code> \u2014 harta polen; alege planta: "
+        "graminee, ambrozie, mesteacan, anin, pelin, maslin (implicit graminee)\n"
         "<code>flood Orsova</code> \u2014 prognoza debit rau (GloFAS)\n"
         "<code>cote Orsova</code> \u2014 cota apei Dunarii/raurilor (AFDJ / PegelOnline)\n"
         "<code>wind Orsova</code> \u2014 viteza si directia vantului pe inaltimi (10 m \u2026 ~3 km)\n"
