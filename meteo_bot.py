@@ -86,7 +86,7 @@ except Exception:
     _PIL = False
 from datetime import datetime, timezone, timedelta
 
-__version__ = "2.2.0"
+__version__ = "2.2.1"
 
 # --- Config ---
 # systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
@@ -202,7 +202,7 @@ ANM_COLORS = {
 DEFAULT_THRESHOLDS = {
     "gust": float(GUST_KMH), "rain": float(RAIN_MM_H), "snow": float(SNOW_CM_H),
     "heat": float(HEAT_C), "frost": float(FROST_C),
-    "pollen": float(os.environ.get("TG_POLLEN_ALERT", "0")),   # 0 = off; gr/m3
+    "pollen": os.environ.get("TG_POLLEN_ALERT", "off"),   # off / moderate / high (per-plant risk)
 }
 THRESH_UNIT = {"gust": "km/h", "rain": "mm/h", "snow": "cm/h", "heat": "\u00b0C",
                "frost": "\u00b0C", "pollen": "gr/m\u00b3"}
@@ -641,10 +641,13 @@ T = {
     "air_dust": {"en": "Dust", "ro": "Praf"},
     "air_aod": {"en": "Aerosols (AOD)", "ro": "Aerosoli (AOD)"},
     "air_uv_clear": {"en": "UV clear sky", "ro": "UV cer senin"},
-    "thr_pollen_note": {"en": "pollen alert: <code>set pollen 30</code> (grains/m³; 0 = off).",
-                        "ro": "alertă polen: <code>set pollen 30</code> (grăunți/m³; 0 = oprit)."},
-    "al_pollen": {"en": "🌿 Pollen ≥ {lim} gr/m³: {parts}",
-                  "ro": "🌿 Polen ≥ {lim} gr/m³: {parts}"},
+    "thr_pollen_note": {"en": "pollen alert by per-plant risk: <code>set pollen high</code> "
+                              "(or <code>moderate</code> / <code>off</code>) — ragweed alerts even at low counts.",
+                        "ro": "alertă polen pe risc per-plantă: <code>set pollen high</code> "
+                              "(sau <code>moderate</code> / <code>off</code>) — ambrozia alertează chiar la valori mici."},
+    "thr_pollen_usage": {"en": "Use: <code>set pollen high</code> | <code>moderate</code> | <code>off</code>",
+                         "ro": "Foloseste: <code>set pollen high</code> | <code>moderate</code> | <code>off</code>"},
+    "al_pollen": {"en": "🌿 Pollen risk: {parts}", "ro": "🌿 Risc polen: {parts}"},
     "air_danger_note": {
         "en": "Band per pollutant: 🟢 good · 🟡 moderate · 🟠 poor · 🔴 very poor · 🟣 extremely poor. "
               "Harm starts at 🟠 poor (sensitive groups) and is unhealthy for everyone at 🔴/🟣.",
@@ -2530,8 +2533,9 @@ def cmd_set(args, chat_id):
     thr = get_thresholds(chat_id)
     if not args:
         lines = [tr("thr_current", lang)]
-        for p in ("gust", "rain", "snow", "heat", "frost", "pollen"):
+        for p in ("gust", "rain", "snow", "heat", "frost"):
             lines.append(f"<code>{p}</code> {thr[p]:g} {THRESH_UNIT[p]}")
+        lines.append(f"<code>pollen</code> {thr.get('pollen', 'off')}")
         lines.append("\n" + tr("thr_pollen_note", lang))
         lines.append(tr("thr_change", lang))
         return "\n".join(lines)
@@ -2539,7 +2543,15 @@ def cmd_set(args, chat_id):
     if param not in DEFAULT_THRESHOLDS:
         return tr("thr_unknown", lang, p=param, opts=", ".join(DEFAULT_THRESHOLDS))
     if len(args) < 2:
-        return tr("thr_usage", lang, p=param)
+        return tr("thr_pollen_usage", lang) if param == "pollen" else tr("thr_usage", lang, p=param)
+    if param == "pollen":                    # a risk level, not a raw number
+        val = args[1].lower()
+        canon = {"off": "off", "0": "off", "moderate": "moderate", "moderat": "moderate",
+                 "high": "high", "ridicat": "high"}.get(val)
+        if canon is None:
+            return tr("thr_pollen_usage", lang)
+        set_threshold(chat_id, "pollen", canon)
+        return tr("thr_set", lang, p="pollen", v=canon, unit="")
     try:
         value = float(args[1].replace(",", "."))
     except ValueError:
@@ -2658,14 +2670,34 @@ def eaqi_band(aqi, lang):
     if a <= 100:  return ("\U0001f534", tr("aqi_vpoor", lang))
     return ("\U0001f7e3", tr("aqi_epoor", lang))
 
-def pollen_level(x, lang):
-    """Very rough pollen risk band (grains/m3), generic across plants."""
-    x = float(x)
-    if x <= 0:   return tr("pol_none", lang)
-    if x < 10:   return tr("pol_low", lang)
-    if x < 30:   return tr("pol_mod", lang)
-    if x < 100:  return tr("pol_high", lang)
-    return tr("pol_vhigh", lang)
+# Per-plant risk breakpoints (grains/m3): (low_max, moderate_max, high_max).
+# Ragweed/mugwort are potent at low counts, so their bands start much lower than
+# grasses or trees — that's how the same number means different risk per plant.
+POLLEN_THRESHOLDS = {
+    "alder_pollen": (10, 50, 100), "birch_pollen": (10, 50, 100),
+    "grass_pollen": (5, 20, 50), "mugwort_pollen": (5, 15, 30),
+    "olive_pollen": (10, 50, 200), "ragweed_pollen": (2, 5, 11),
+}
+_POLLEN_GENERIC = (10, 30, 100)
+_POLLEN_BAND_KEYS = ["pol_low", "pol_mod", "pol_high", "pol_vhigh"]
+
+def pollen_band_index(var, value):
+    """-1 none, 0 low, 1 moderate, 2 high, 3 very high (per-plant scale)."""
+    lo, mod, hi = POLLEN_THRESHOLDS.get(var, _POLLEN_GENERIC)
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return -1
+    if v <= 0:   return -1
+    if v <= lo:  return 0
+    if v <= mod: return 1
+    if v <= hi:  return 2
+    return 3
+
+def pollen_level(value, lang, var=None):
+    """Risk label for a pollen value, using the plant's own thresholds."""
+    idx = pollen_band_index(var, value)
+    return tr("pol_none", lang) if idx < 0 else tr(_POLLEN_BAND_KEYS[idx], lang)
 
 def cmd_air(args, chat_id):
     lang = get_lang(chat_id)
@@ -2741,7 +2773,7 @@ def cmd_air(args, chat_id):
     for key, lblkey in pollens:
         x = cur.get(key)
         if isinstance(x, (int, float)):
-            pol.append(f"{tr(lblkey, lang)}: <b>{x:.0f}</b> — {pollen_level(x, lang)}")
+            pol.append(f"{tr(lblkey, lang)}: <b>{x:.0f}</b> — {pollen_level(x, lang, key)}")
     if pol:
         lines.append("\n<b>" + tr("air_g_pollen", lang) + "</b> <i>(grains/m³)</i>")
         lines.extend(pol)
@@ -4210,6 +4242,9 @@ def is_allowed(user_id, chat_id):
 # --- Background alert checker ---
 POLLEN_ALERT_VARS = ("alder_pollen", "birch_pollen", "grass_pollen",
                      "mugwort_pollen", "olive_pollen", "ragweed_pollen")
+# Which per-plant risk band arms the alert. 'off' disables it.
+POLLEN_ALERT_LEVELS = {"moderate": 1, "moderat": 1, "high": 2, "ridicat": 2,
+                       "very": 3, "foarte": 3}
 
 def current_pollen(lat, lon):
     try:
@@ -4223,14 +4258,14 @@ def current_pollen(lat, lon):
 def pollen_alerts_for(chat_id, slot, loc, thr, lang):
     """Proactive pollen alert when any plant is at/above the user's threshold.
     Threshold 0 = disabled. Sent at most once per slot per day."""
-    limit = thr.get("pollen", 0) or 0
-    if limit <= 0:
+    target = POLLEN_ALERT_LEVELS.get(str(thr.get("pollen", "off")).lower())
+    if target is None:                       # 'off' / unset -> disabled
         return []
     cur = current_pollen(loc["lat"], loc["lon"])
     if not cur:
         return []
     over = [(var, cur[var]) for var in POLLEN_ALERT_VARS
-            if isinstance(cur.get(var), (int, float)) and cur[var] >= limit]
+            if pollen_band_index(var, cur.get(var)) >= target]
     if not over:
         return []
     today = (cur.get("time", "") or "")[:10]
@@ -4238,10 +4273,11 @@ def pollen_alerts_for(chat_id, slot, loc, thr, lang):
     if already_sent(chat_id, key):
         return []
     mark_sent(chat_id, key, today)
-    parts = ", ".join(f"{tr(POLLEN_LABEL.get(var, 'pol_grass'), lang)} <b>{val:.0f}</b>"
+    parts = ", ".join(f"{tr(POLLEN_LABEL.get(var, 'pol_grass'), lang)} <b>{val:.0f}</b> "
+                      f"({pollen_level(val, lang, var)})"
                       for var, val in sorted(over, key=lambda x: -x[1]))
     return ["\u26a0\ufe0f <b>" + loc_label(loc) + "</b>\n" +
-            tr("al_pollen", lang, parts=parts, lim=f"{limit:g}")]
+            tr("al_pollen", lang, parts=parts)]
 
 def alert_loop():
     while True:
