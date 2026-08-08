@@ -86,7 +86,7 @@ except Exception:
     _PIL = False
 from datetime import datetime, timezone, timedelta
 
-__version__ = "2.2.3"
+__version__ = "2.2.4"
 
 # --- Config ---
 # systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
@@ -815,8 +815,8 @@ T = {
     "cap_sat": {"en": "Cloud cover", "ro": "Acoperire nori"},
     "cap_map": {"en": "Clouds + Radar", "ro": "Nori + Radar"},
     "map_src": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
-    "map_src_sat": {"en": "source: RainViewer infrared satellite, \u00a9 OpenStreetMap",
-                    "ro": "sursa: satelit infrarosu RainViewer, \u00a9 OpenStreetMap"},
+    "map_src_sat": {"en": "source: EUMETSAT Meteosat / RainViewer, \u00a9 OpenStreetMap",
+                    "ro": "sursa: EUMETSAT Meteosat / RainViewer, \u00a9 OpenStreetMap"},
     "map_src_radar": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_anm": {"en": "source: meteoromania.ro (ANM), \u00a9 OpenStreetMap", "ro": "sursa: meteoromania.ro (ANM), \u00a9 OpenStreetMap"},
     "model_set_raw": {
@@ -1629,6 +1629,10 @@ LABEL_TILE_LIGHT = os.environ.get("TG_LABEL_TILE",
 LABEL_TILE_DARK = os.environ.get("TG_LABEL_TILE_DARK",
     "https://basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png")
 MAP_ZOOM_MAX = int(os.environ.get("TG_MAP_ZOOM_MAX", "7"))   # tile providers stop past this
+# Real satellite: EUMETSAT EUMETView WMS (Meteosat over Europe, like Windy/EUMETSAT).
+# One GetMap covers the whole canvas, so it aligns pixel-perfect with the base.
+SAT_WMS_URL = os.environ.get("TG_SAT_WMS_URL", "https://view.eumetsat.int/geoserver/ows")
+SAT_WMS_LAYER = os.environ.get("TG_SAT_WMS_LAYER", "mumi:worldcloudmap_ir108")
 MAP_THEME_DEFAULT = os.environ.get("TG_MAP_THEME", "light")   # 'light' or 'dark'
 # On a dark base the clouds must be light to stand out; on light, dark grey.
 CLOUD_RGB_DARK = tuple(int(x) for x in
@@ -2070,6 +2074,44 @@ def _stack_below(base, strip):
     out.alpha_composite(strip, (0, bh))
     return out
 
+def _wms_sat(left, top, w, h, n):
+    """Fetch a real Meteosat image (EUMETView WMS) for the exact canvas bbox in
+    Web Mercator, so it lines up with the base tiles. Returns RGBA or None."""
+    if not SAT_WMS_URL:
+        return None
+    span = n * TILE
+    def mx(px):
+        return (px / span) * 2 * _MERC - _MERC
+    def my(py):
+        return _MERC - (py / span) * 2 * _MERC
+    params = {"service": "WMS", "request": "GetMap", "version": "1.3.0",
+              "layers": SAT_WMS_LAYER, "styles": "", "format": "image/png",
+              "transparent": "true", "crs": "EPSG:3857",
+              "bbox": f"{mx(left)},{my(top + h)},{mx(left + w)},{my(top)}",
+              "width": int(w), "height": int(h)}
+    try:
+        r = requests.get(SAT_WMS_URL, params=params, timeout=20, headers=_TILE_UA)
+        if r.status_code != 200 or not r.content:
+            return None
+        if "xml" in (r.headers.get("content-type", "").lower()):   # WMS error report
+            return None
+        return Image.open(BytesIO(r.content)).convert("RGBA")
+    except Exception:
+        return None
+
+def _whiten_ir(img):
+    """Turn a RainViewer infrared tile into crisp white clouds: brightness ->
+    opacity, so cold cloud tops read as bright white and clear sky is transparent.
+    Removes the muddy reddish IR tint and gives sharp, well-defined cloud edges."""
+    if img is None:
+        return None
+    lum = img.convert("L")
+    # dark (clear) -> transparent; bright (cloud) -> opaque white, with a stretch
+    alpha = lum.point(lambda p: 0 if p < 55 else min(255, int((p - 55) * 300 / 200)))
+    out = Image.new("RGBA", img.size, (250, 250, 252, 0))
+    out.putalpha(alpha)
+    return out
+
 def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
               cloud_rgb=None, cloud_alpha=None, tz=None, legend=None,
               cloud_var="cloud_cover", when=None, theme="light", model_id=None,
@@ -2171,6 +2213,19 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
             if overlay is not None:
                 canvas.alpha_composite(overlay)
                 _stamp(iso)
+            continue
+        if layer == "satellite":
+            wms = _wms_sat(left, top, w, h, n)      # real Meteosat (EUMETView) first
+            if wms is not None:
+                canvas.alpha_composite(_whiten_ir(wms))
+            else:                                   # fallback: RainViewer IR tiles
+                def _sat_get(x, y):
+                    u = _overlay_url(frames, "satellite", z, x, y)
+                    return _whiten_ir(_fetch_img(u)) if u else None
+                paste_layer(_sat_get, True)
+                ts = frames.get("sat_time")
+                if ts and src_dt is None:
+                    src_dt = datetime.fromtimestamp(ts, timezone.utc)
             continue
         url_of = lambda x, y, L=layer: _overlay_url(frames, L, z, x, y)
         paste_layer(lambda x, y: _fetch_img(url_of(x, y)) if url_of(x, y) else None, True)
@@ -3753,9 +3808,11 @@ def cmd_sat(args, chat_id):
     if var is not None:                        # altitude-specific -> cloud field
         return _map_cmd(toks, chat_id, ["clouds"], label,
                         src_key="map_src_clouds", cloud_var=var)
-    if rainviewer_frames().get("satellite"):   # real IR satellite when available
+    if SAT_WMS_URL or rainviewer_frames().get("satellite"):   # real satellite imagery
+        _cfg = get_map_cfg(chat_id)
+        _dim = 0.15 if _cfg.get("theme") == "dark" else 0.4   # white clouds vs. base
         return _map_cmd(toks, chat_id, ["satellite"], "cap_sat",
-                        src_key="map_src_sat", dim=max(0.25, get_map_cfg(chat_id)["base_dim"]))
+                        src_key="map_src_sat", dim=max(_dim, _cfg["base_dim"]))
     return _map_cmd(toks, chat_id, ["clouds"], "cap_sat",     # fallback: cloud field
                     src_key="map_src_clouds", cloud_var="cloud_cover")
 
