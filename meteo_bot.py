@@ -86,7 +86,7 @@ except Exception:
     _PIL = False
 from datetime import datetime, timezone, timedelta
 
-__version__ = "2.2.5"
+__version__ = "2.3.0"
 
 # --- Config ---
 # systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
@@ -920,8 +920,8 @@ T = {
     "mapset_zoom_usage": {"en": "Use: <code>mapset zoom 7</code> (3..7)", "ro": "Foloseste: <code>mapset zoom 7</code> (3..7)"},
     "mapset_tz_usage": {"en": "Use: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>",
                         "ro": "Foloseste: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>"},
-    "mapset_theme_usage": {"en": "Use: <code>thm dark</code> or <code>thm light</code>",
-                           "ro": "Foloseste: <code>thm dark</code> sau <code>thm light</code>"},
+    "mapset_theme_usage": {"en": "Use: <code>thm</code> &lt;light | dark | positron | voyager | green&gt;",
+                           "ro": "Foloseste: <code>thm</code> &lt;light | dark | positron | voyager | green&gt;"},
     "map_src_dark": {"en": "© OpenStreetMap, © CARTO", "ro": "© OpenStreetMap, © CARTO"},
     "alarm_none": {"en": "No alarms set. Add one: <code>alarm 1 21:05</code> (saved slot 1 at 21:05).",
                    "ro": "Nicio alarma setata. Adauga: <code>alarm 1 21:05</code> (slotul 1 salvat, la 21:05)."},
@@ -1634,6 +1634,28 @@ MAP_ZOOM_MAX = int(os.environ.get("TG_MAP_ZOOM_MAX", "7"))   # tile providers st
 SAT_WMS_URL = os.environ.get("TG_SAT_WMS_URL", "https://view.eumetsat.int/geoserver/ows")
 SAT_WMS_LAYER = os.environ.get("TG_SAT_WMS_LAYER", "mumi:worldcloudmap_ir108")
 MAP_THEME_DEFAULT = os.environ.get("TG_MAP_THEME", "light")   # 'light' or 'dark'
+# Selectable base-map themes (name -> tile URL template, is_dark).
+THEME_TILES = {
+    "light": (OSM_TILE, False),
+    "dark": (DARK_TILE, True),
+    "positron": ("https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", False),
+    "voyager": ("https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png", False),
+    "green": ("https://services.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}", False),
+    "darkmatter": (DARK_TILE, True),
+}
+THEME_ALIASES = {
+    "night": "dark", "intunecat": "dark", "negru": "dark",
+    "day": "light", "luminos": "light", "alb": "light", "osm": "light",
+    "grey": "positron", "gray": "positron", "gri": "positron", "minimal": "positron",
+    "color": "voyager", "colour": "voyager", "culoare": "voyager", "street": "voyager",
+    "verde": "green", "natgeo": "green", "terrain": "green", "windy": "green",
+}
+def resolve_theme(name):
+    n = (name or "").lower()
+    n = THEME_ALIASES.get(n, n)
+    return n if n in THEME_TILES else None
+def theme_is_dark(name):
+    return THEME_TILES.get(name, (None, False))[1]
 # On a dark base the clouds must be light to stand out; on light, dark grey.
 CLOUD_RGB_DARK = tuple(int(x) for x in
                        os.environ.get("TG_CLOUD_RGB_DARK", "235,235,240").split(","))[:3]
@@ -2106,10 +2128,9 @@ def _whiten_ir(img):
     if img is None:
         return None
     lum = img.convert("L")
-    # dark (clear) -> transparent; bright (cloud) -> opaque white. Lower threshold
-    # and steeper stretch pick up thin cloud and make tops crisp/bright like Windy.
-    alpha = lum.point(lambda p: 0 if p < 42 else min(255, int((p - 42) * 340 / 170)))
-    out = Image.new("RGBA", img.size, (255, 255, 255, 0))
+    # dark (clear) -> transparent; bright (cloud) -> opaque white, with a stretch
+    alpha = lum.point(lambda p: 0 if p < 55 else min(255, int((p - 55) * 300 / 200)))
+    out = Image.new("RGBA", img.size, (250, 250, 252, 0))
     out.putalpha(alpha)
     return out
 
@@ -2160,8 +2181,7 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
         if composite:
             canvas.alpha_composite(layer_img)             # dest (0,0) -> valid
 
-    dark = (theme == "dark")
-    tile_url = DARK_TILE if dark else OSM_TILE
+    tile_url, dark = THEME_TILES.get(theme, THEME_TILES["light"])
     paste_layer(lambda x, y: _fetch_img(tile_url.format(z=z, x=x, y=y)), False)
     if base_dim > 0:                                  # fade the base map
         wash = (0, 0, 0) if dark else (255, 255, 255)   # darken on dark, whiten on light
@@ -3553,7 +3573,7 @@ HELP = {
         "<code>heat Orsova</code> \u2014 temperature map (colour scale on the image)\n"
         "<code>hum Orsova</code> \u2014 relative humidity map\n"
         "<code>sat Orsova low +6h</code> \u2014 any map as forecast, up to +72h\n"
-        "<code>thm dark</code> / <code>thm light</code> \u2014 dark or light basemap\n"
+        "<code>thm</code> &lt;light|dark|positron|voyager|green&gt; \u2014 base-map theme\n"
         "<code>map Orsova</code> \u2014 clouds + radar\n"
         "<code>mapset</code> \u2014 map settings (radar source, dim, cloud colour/opacity, zoom)\n"
         "<code>mapset tz Europe/Bucharest</code> \u2014 local time on maps (or <code>+3</code> / <code>auto</code>)\n\n"
@@ -3613,7 +3633,7 @@ HELP = {
         "<code>heat Orsova</code> \u2014 harta temperaturilor (scara de culori pe imagine)\n"
         "<code>hum Orsova</code> \u2014 harta umiditatii relative\n"
         "<code>sat Orsova low +6h</code> \u2014 orice harta ca prognoza, pana la +72h\n"
-        "<code>thm dark</code> / <code>thm light</code> \u2014 fundal inchis sau luminos\n"
+        "<code>thm</code> &lt;light|dark|positron|voyager|green&gt; \u2014 tema hartii\n"
         "<code>map Orsova</code> \u2014 nori + radar\n"
         "<code>mapset</code> \u2014 setari harta (sursa radar, estompare, culoare/opacitate nori, zoom)\n"
         "<code>mapset tz Europe/Bucharest</code> \u2014 ora locala pe harti (sau <code>+3</code> / <code>auto</code>)\n\n"
@@ -3702,7 +3722,7 @@ def _parse_ahead(tok):
     return max(0, min(hours, MAP_MAX_AHEAD_H))
 
 def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=None,
-             cloud_var="cloud_cover", dim=None, theme=None):
+             cloud_var="cloud_cover", dim=None):
     lang = get_lang(chat_id)
     if not _PIL:
         return tr("map_nopil", lang)
@@ -3742,7 +3762,7 @@ def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=Non
                                 cloud_rgb=tuple(cfg["cloud_rgb"]),
                                 cloud_alpha=cfg["cloud_alpha"], tz=cfg.get("tz", ""),
                                 legend=bar, cloud_var=cloud_var, when=when,
-                                theme=(theme or cfg.get("theme", MAP_THEME_DEFAULT)),
+                                theme=cfg.get("theme", MAP_THEME_DEFAULT),
                                 model_id=resolve_model(get_model(chat_id))[0])
     except Exception as e:
         return tr("err_generic", lang, e=e)
@@ -3810,8 +3830,10 @@ def cmd_sat(args, chat_id):
         return _map_cmd(toks, chat_id, ["clouds"], label,
                         src_key="map_src_clouds", cloud_var=var)
     if SAT_WMS_URL or rainviewer_frames().get("satellite"):   # real satellite imagery
-        return _map_cmd(toks, chat_id, ["satellite"], "cap_sat",   # Windy-style dark base
-                        src_key="map_src_sat", theme="dark", dim=0.05)
+        _cfg = get_map_cfg(chat_id)
+        _dim = 0.15 if theme_is_dark(_cfg.get("theme")) else 0.4   # white clouds vs. base
+        return _map_cmd(toks, chat_id, ["satellite"], "cap_sat",
+                        src_key="map_src_sat", dim=max(_dim, _cfg["base_dim"]))
     return _map_cmd(toks, chat_id, ["clouds"], "cap_sat",     # fallback: cloud field
                     src_key="map_src_clouds", cloud_var="cloud_cover")
 
@@ -3943,14 +3965,11 @@ def cmd_mapset(args, chat_id):
         set_map_cfg(chat_id, "zoom", zz)
         return tr("mapset_set", lang, k="zoom", v=zz)
     if key in ("theme", "thm", "tema"):
-        v = val.lower()
-        if v in ("dark", "night", "intunecat", "negru"):
-            set_map_cfg(chat_id, "theme", "dark")
-            return tr("mapset_set", lang, k="theme", v="dark")
-        if v in ("light", "day", "luminos", "alb"):
-            set_map_cfg(chat_id, "theme", "light")
-            return tr("mapset_set", lang, k="theme", v="light")
-        return tr("mapset_theme_usage", lang)
+        t = resolve_theme(val)
+        if not t:
+            return tr("mapset_theme_usage", lang)
+        set_map_cfg(chat_id, "theme", t)
+        return tr("mapset_set", lang, k="theme", v=t)
     if key in ("tz", "timezone", "fus"):
         v = val.strip()
         if v.lower() in ("auto", "server", "local", "reset", ""):
