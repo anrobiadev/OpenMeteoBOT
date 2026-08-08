@@ -86,7 +86,7 @@ except Exception:
     _PIL = False
 from datetime import datetime, timezone, timedelta
 
-__version__ = "2.2.4"
+__version__ = "2.2.5"
 
 # --- Config ---
 # systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
@@ -2106,9 +2106,10 @@ def _whiten_ir(img):
     if img is None:
         return None
     lum = img.convert("L")
-    # dark (clear) -> transparent; bright (cloud) -> opaque white, with a stretch
-    alpha = lum.point(lambda p: 0 if p < 55 else min(255, int((p - 55) * 300 / 200)))
-    out = Image.new("RGBA", img.size, (250, 250, 252, 0))
+    # dark (clear) -> transparent; bright (cloud) -> opaque white. Lower threshold
+    # and steeper stretch pick up thin cloud and make tops crisp/bright like Windy.
+    alpha = lum.point(lambda p: 0 if p < 42 else min(255, int((p - 42) * 340 / 170)))
+    out = Image.new("RGBA", img.size, (255, 255, 255, 0))
     out.putalpha(alpha)
     return out
 
@@ -3701,7 +3702,7 @@ def _parse_ahead(tok):
     return max(0, min(hours, MAP_MAX_AHEAD_H))
 
 def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=None,
-             cloud_var="cloud_cover", dim=None):
+             cloud_var="cloud_cover", dim=None, theme=None):
     lang = get_lang(chat_id)
     if not _PIL:
         return tr("map_nopil", lang)
@@ -3741,7 +3742,7 @@ def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=Non
                                 cloud_rgb=tuple(cfg["cloud_rgb"]),
                                 cloud_alpha=cfg["cloud_alpha"], tz=cfg.get("tz", ""),
                                 legend=bar, cloud_var=cloud_var, when=when,
-                                theme=cfg.get("theme", MAP_THEME_DEFAULT),
+                                theme=(theme or cfg.get("theme", MAP_THEME_DEFAULT)),
                                 model_id=resolve_model(get_model(chat_id))[0])
     except Exception as e:
         return tr("err_generic", lang, e=e)
@@ -3809,10 +3810,8 @@ def cmd_sat(args, chat_id):
         return _map_cmd(toks, chat_id, ["clouds"], label,
                         src_key="map_src_clouds", cloud_var=var)
     if SAT_WMS_URL or rainviewer_frames().get("satellite"):   # real satellite imagery
-        _cfg = get_map_cfg(chat_id)
-        _dim = 0.15 if _cfg.get("theme") == "dark" else 0.4   # white clouds vs. base
-        return _map_cmd(toks, chat_id, ["satellite"], "cap_sat",
-                        src_key="map_src_sat", dim=max(_dim, _cfg["base_dim"]))
+        return _map_cmd(toks, chat_id, ["satellite"], "cap_sat",   # Windy-style dark base
+                        src_key="map_src_sat", theme="dark", dim=0.05)
     return _map_cmd(toks, chat_id, ["clouds"], "cap_sat",     # fallback: cloud field
                     src_key="map_src_clouds", cloud_var="cloud_cover")
 
