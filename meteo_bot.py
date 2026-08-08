@@ -80,13 +80,13 @@ import threading
 import requests
 from io import BytesIO
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
     _PIL = True
 except Exception:
     _PIL = False
 from datetime import datetime, timezone, timedelta
 
-__version__ = "2.3.4"
+__version__ = "2.3.5"
 
 # --- Config ---
 # systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
@@ -920,8 +920,8 @@ T = {
     "mapset_zoom_usage": {"en": "Use: <code>mapset zoom 7</code> (3..7)", "ro": "Foloseste: <code>mapset zoom 7</code> (3..7)"},
     "mapset_tz_usage": {"en": "Use: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>",
                         "ro": "Foloseste: <code>mapset tz Europe/Bucharest</code> | <code>mapset tz +3</code> | <code>mapset tz auto</code>"},
-    "mapset_theme_usage": {"en": "Use: <code>thm</code> &lt;light | dark | positron | voyager | windy&gt;",
-                           "ro": "Foloseste: <code>thm</code> &lt;light | dark | positron | voyager | windy&gt;"},
+    "mapset_theme_usage": {"en": "Use: <code>thm</code> &lt;light | dark | positron | voyager&gt;",
+                           "ro": "Foloseste: <code>thm</code> &lt;light | dark | positron | voyager&gt;"},
     "map_src_dark": {"en": "© OpenStreetMap, © CARTO", "ro": "© OpenStreetMap, © CARTO"},
     "alarm_none": {"en": "No alarms set. Add one: <code>alarm 1 21:05</code> (saved slot 1 at 21:05).",
                    "ro": "Nicio alarma setata. Adauga: <code>alarm 1 21:05</code> (slotul 1 salvat, la 21:05)."},
@@ -1640,8 +1640,6 @@ THEME_TILES = {
     "dark": (DARK_TILE, True),
     "positron": ("https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", False),
     "voyager": ("https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png", False),
-    "windy": (os.environ.get("TG_WINDY_TILE",
-              "https://tiles.windy.com/tiles/v11.2/grayland/{z}/{x}/{y}.png"), True),
     "darkmatter": (DARK_TILE, True),
 }
 THEME_ALIASES = {
@@ -1649,7 +1647,7 @@ THEME_ALIASES = {
     "day": "light", "luminos": "light", "alb": "light", "osm": "light",
     "grey": "positron", "gray": "positron", "gri": "positron", "minimal": "positron",
     "color": "voyager", "colour": "voyager", "culoare": "voyager", "street": "voyager",
-    "verde": "windy", "green": "windy",
+    "verde": "dark", "green": "dark", "windy": "dark",
     "simple": "dark", "curat": "dark", "clean": "dark", "borders": "dark",
 }
 def resolve_theme(name):
@@ -2135,10 +2133,10 @@ def _whiten_ir(img):
     if img is None:
         return None
     lum = img.convert("L")
-    # White clouds like Windy: colour is pure white, brightness drives opacity with a
-    # steep ramp so cloud tops are solid white and edges stay crisp; clear sky is
-    # transparent, and the alpha gradient preserves cloud structure/density.
-    alpha = lum.point(lambda p: 0 if p < 40 else min(255, int((p - 40) * 255 / 80)))
+    lum = ImageOps.autocontrast(lum, cutoff=1)     # stretch: faint IR clouds -> bright
+    # White clouds like Windy: pure white, brightness drives opacity with an aggressive
+    # ramp so clouds are solid (not washed out) while thin edges keep some structure.
+    alpha = lum.point(lambda p: 0 if p < 35 else min(255, int((p - 35) * 255 / 55)))
     out = Image.new("RGBA", img.size, (255, 255, 255, 0))
     out.putalpha(alpha)
     return out
@@ -3582,7 +3580,7 @@ HELP = {
         "<code>heat Orsova</code> \u2014 temperature map (colour scale on the image)\n"
         "<code>hum Orsova</code> \u2014 relative humidity map\n"
         "<code>sat Orsova low +6h</code> \u2014 any map as forecast, up to +72h\n"
-        "<code>thm</code> &lt;light|dark|positron|voyager|windy&gt; \u2014 base-map theme\n"
+        "<code>thm</code> &lt;light|dark|positron|voyager&gt; \u2014 base-map theme\n"
         "<code>map Orsova</code> \u2014 clouds + radar\n"
         "<code>mapset</code> \u2014 map settings (radar source, dim, cloud colour/opacity, zoom)\n"
         "<code>mapset tz Europe/Bucharest</code> \u2014 local time on maps (or <code>+3</code> / <code>auto</code>)\n\n"
@@ -3642,7 +3640,7 @@ HELP = {
         "<code>heat Orsova</code> \u2014 harta temperaturilor (scara de culori pe imagine)\n"
         "<code>hum Orsova</code> \u2014 harta umiditatii relative\n"
         "<code>sat Orsova low +6h</code> \u2014 orice harta ca prognoza, pana la +72h\n"
-        "<code>thm</code> &lt;light|dark|positron|voyager|windy&gt; \u2014 tema hartii\n"
+        "<code>thm</code> &lt;light|dark|positron|voyager&gt; \u2014 tema hartii\n"
         "<code>map Orsova</code> \u2014 nori + radar\n"
         "<code>mapset</code> \u2014 setari harta (sursa radar, estompare, culoare/opacitate nori, zoom)\n"
         "<code>mapset tz Europe/Bucharest</code> \u2014 ora locala pe harti (sau <code>+3</code> / <code>auto</code>)\n\n"
@@ -3840,7 +3838,7 @@ def cmd_sat(args, chat_id):
                         src_key="map_src_clouds", cloud_var=var)
     if SAT_WMS_URL or rainviewer_frames().get("satellite"):   # real satellite imagery
         _cfg = get_map_cfg(chat_id)
-        _dim = 0.15 if theme_is_dark(_cfg.get("theme")) else 0.4   # white clouds vs. base
+        _dim = 0.28 if theme_is_dark(_cfg.get("theme")) else 0.45  # darken base so white clouds pop
         return _map_cmd(toks, chat_id, ["satellite"], "cap_sat",
                         src_key="map_src_sat", dim=max(_dim, _cfg["base_dim"]))
     return _map_cmd(toks, chat_id, ["clouds"], "cap_sat",     # fallback: cloud field
