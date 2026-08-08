@@ -86,7 +86,7 @@ except Exception:
     _PIL = False
 from datetime import datetime, timezone, timedelta
 
-__version__ = "2.3.0"
+__version__ = "2.3.1"
 
 # --- Config ---
 # systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
@@ -2106,18 +2106,23 @@ def _wms_sat(left, top, w, h, n):
         return (px / span) * 2 * _MERC - _MERC
     def my(py):
         return _MERC - (py / span) * 2 * _MERC
+    ss = 2                                     # supersample for sharper cloud edges
+    rw, rh = min(int(w) * ss, 2048), min(int(h) * ss, 2048)
     params = {"service": "WMS", "request": "GetMap", "version": "1.3.0",
               "layers": SAT_WMS_LAYER, "styles": "", "format": "image/png",
               "transparent": "true", "crs": "EPSG:3857",
               "bbox": f"{mx(left)},{my(top + h)},{mx(left + w)},{my(top)}",
-              "width": int(w), "height": int(h)}
+              "width": rw, "height": rh}
     try:
-        r = requests.get(SAT_WMS_URL, params=params, timeout=20, headers=_TILE_UA)
+        r = requests.get(SAT_WMS_URL, params=params, timeout=25, headers=_TILE_UA)
         if r.status_code != 200 or not r.content:
             return None
         if "xml" in (r.headers.get("content-type", "").lower()):   # WMS error report
             return None
-        return Image.open(BytesIO(r.content)).convert("RGBA")
+        im = Image.open(BytesIO(r.content)).convert("RGBA")
+        if (rw, rh) != (int(w), int(h)):
+            im = im.resize((int(w), int(h)), Image.LANCZOS)
+        return im
     except Exception:
         return None
 
@@ -2128,10 +2133,12 @@ def _whiten_ir(img):
     if img is None:
         return None
     lum = img.convert("L")
-    # dark (clear) -> transparent; bright (cloud) -> opaque white, with a stretch
-    alpha = lum.point(lambda p: 0 if p < 55 else min(255, int((p - 55) * 300 / 200)))
-    out = Image.new("RGBA", img.size, (250, 250, 252, 0))
-    out.putalpha(alpha)
+    # Steep alpha: clouds go opaque quickly (crisp, not washed out); clear sky stays
+    # transparent. Keep the brightened luminance as the colour so cloud texture/edges
+    # show instead of a flat smear.
+    alpha = lum.point(lambda p: 0 if p < 38 else min(255, int((p - 38) * 255 / 85)))
+    bright = lum.point(lambda p: min(255, int(130 + p * 0.62)))
+    out = Image.merge("RGBA", (bright, bright, bright, alpha))
     return out
 
 def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
