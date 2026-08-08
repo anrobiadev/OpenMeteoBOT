@@ -86,7 +86,7 @@ except Exception:
     _PIL = False
 from datetime import datetime, timezone, timedelta
 
-__version__ = "2.2.2"
+__version__ = "2.2.3"
 
 # --- Config ---
 # systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
@@ -815,6 +815,8 @@ T = {
     "cap_sat": {"en": "Cloud cover", "ro": "Acoperire nori"},
     "cap_map": {"en": "Clouds + Radar", "ro": "Nori + Radar"},
     "map_src": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
+    "map_src_sat": {"en": "source: RainViewer infrared satellite, \u00a9 OpenStreetMap",
+                    "ro": "sursa: satelit infrarosu RainViewer, \u00a9 OpenStreetMap"},
     "map_src_radar": {"en": "source: RainViewer, \u00a9 OpenStreetMap", "ro": "sursa: RainViewer, \u00a9 OpenStreetMap"},
     "map_src_anm": {"en": "source: meteoromania.ro (ANM), \u00a9 OpenStreetMap", "ro": "sursa: meteoromania.ro (ANM), \u00a9 OpenStreetMap"},
     "model_set_raw": {
@@ -2176,7 +2178,7 @@ def build_map(lat, lon, layers, z=None, w=None, h=None, base_dim=0.0,
         if ts and src_dt is None:
             src_dt = datetime.fromtimestamp(ts, timezone.utc)
     # Overlay place-name labels on top of coloured field maps so they stay orientable.
-    if any(l in ("heat", "humidity", "clouds", "pollen") for l in layers):
+    if any(l in ("heat", "humidity", "clouds", "pollen", "satellite", "radar") for l in layers):
         _lbl = LABEL_TILE_DARK if dark else LABEL_TILE_LIGHT
         paste_layer(lambda x, y: _fetch_img(_lbl.format(z=z, x=x, y=y)), True)
     tlabel = local_time_label(src_dt, tz)
@@ -3644,7 +3646,7 @@ def _parse_ahead(tok):
     return max(0, min(hours, MAP_MAX_AHEAD_H))
 
 def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=None,
-             cloud_var="cloud_cover"):
+             cloud_var="cloud_cover", dim=None):
     lang = get_lang(chat_id)
     if not _PIL:
         return tr("map_nopil", lang)
@@ -3680,7 +3682,8 @@ def _map_cmd(args, chat_id, layers, label_key, src_key="map_src", legend_key=Non
         bar = None
     try:
         png, tlabel = build_map(loc["lat"], loc["lon"], layers, z=cfg["zoom"],
-                                base_dim=cfg["base_dim"], cloud_rgb=tuple(cfg["cloud_rgb"]),
+                                base_dim=(dim if dim is not None else cfg["base_dim"]),
+                                cloud_rgb=tuple(cfg["cloud_rgb"]),
                                 cloud_alpha=cfg["cloud_alpha"], tz=cfg.get("tz", ""),
                                 legend=bar, cloud_var=cloud_var, when=when,
                                 theme=cfg.get("theme", MAP_THEME_DEFAULT),
@@ -3736,18 +3739,25 @@ CLOUD_VARS = {"low": ("cloud_cover_low", "cap_sat_low"),
               "sus": ("cloud_cover_high", "cap_sat_high")}
 
 def cmd_sat(args, chat_id):
-    # Cloud cover from Open-Meteo (RainViewer's free tier has no satellite).
-    # `sat <loc> low` -> low clouds only (the layer that matters for UAS flights).
+    # Default `sat` = real infrared satellite (RainViewer) for crisp cloud edges;
+    # `sat <loc> low|mid|high` stays on the Open-Meteo cloud field (altitude-split,
+    # which satellite IR can't do) — the layer that matters for UAS flights.
     toks = list(args)
-    var, label = "cloud_cover", "cap_sat"
+    var, label = None, "cap_sat"
     if len(toks) > 1 and toks[-1].lower() in CLOUD_VARS:
         var, label = CLOUD_VARS[toks[-1].lower()]
         toks = toks[:-1]
     elif len(toks) > 2 and toks[-2].lower() in CLOUD_VARS:   # "<loc> low +6h"
         var, label = CLOUD_VARS[toks[-2].lower()]
         toks = toks[:-2] + toks[-1:]
-    return _map_cmd(toks, chat_id, ["clouds"], label,
-                    src_key="map_src_clouds", cloud_var=var)
+    if var is not None:                        # altitude-specific -> cloud field
+        return _map_cmd(toks, chat_id, ["clouds"], label,
+                        src_key="map_src_clouds", cloud_var=var)
+    if rainviewer_frames().get("satellite"):   # real IR satellite when available
+        return _map_cmd(toks, chat_id, ["satellite"], "cap_sat",
+                        src_key="map_src_sat", dim=max(0.25, get_map_cfg(chat_id)["base_dim"]))
+    return _map_cmd(toks, chat_id, ["clouds"], "cap_sat",     # fallback: cloud field
+                    src_key="map_src_clouds", cloud_var="cloud_cover")
 
 def cmd_hum(args, chat_id):
     # Relative humidity at 2 m, Open-Meteo's official 'relative' palette.
