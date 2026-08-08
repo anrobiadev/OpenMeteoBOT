@@ -86,7 +86,7 @@ except Exception:
     _PIL = False
 from datetime import datetime, timezone, timedelta
 
-__version__ = "2.3.1"
+__version__ = "2.3.2"
 
 # --- Config ---
 # systemd units restarted by `restart` (uses your SYSTEM password via sudo -S,
@@ -1640,7 +1640,9 @@ THEME_TILES = {
     "dark": (DARK_TILE, True),
     "positron": ("https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", False),
     "voyager": ("https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png", False),
-    "green": ("https://services.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}", False),
+    "green": (os.environ.get("TG_GREEN_TILE",
+              "https://services.arcgisonline.com/ArcGIS/rest/services/"
+              "World_Physical_Map/MapServer/tile/{z}/{y}/{x}"), False),
     "darkmatter": (DARK_TILE, True),
 }
 THEME_ALIASES = {
